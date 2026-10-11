@@ -6,6 +6,7 @@ Restricted styling palette: Standard Default and Blue accents only.
 import sys
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 # Ensure UTF-8 stdout encoding on Windows
 if hasattr(sys.stdout, 'reconfigure'):
@@ -54,6 +55,7 @@ from utils.visualizer import (
     plot_stock_risk_analysis
 )
 from test_runner import run_all_tests
+from generate_pdf_report import build_pdf_report
 
 
 def resolve_company_info(user_input: str) -> tuple[str, str]:
@@ -175,11 +177,18 @@ class StockRiskApplication:
     def option_view_about_docs(self):
         """Option 6: View Documentation."""
         try:
-            with open("ABOUT.md", "r", encoding="utf-8") as f:
+            about_path = Path(__file__).resolve().parent / "ABOUT.md"
+            with open(about_path, "r", encoding="utf-8") as f:
                 content = f.read()
             console.print(Markdown(content))
         except Exception as e:
             console.print(f"[bold blue]Could not load documentation: {str(e)}[/bold blue]")
+
+    def option_generate_pdf_report(self):
+        """Option 7: Generate PDF Report."""
+        console.print("[bold blue]Generating PDF Research Report...[/bold blue]")
+        build_pdf_report()
+        console.print("[bold blue]PDF Report generated: Stock_Market_Risk_Prediction_Report.pdf[/bold blue]")
 
     def run_menu(self):
         """Main application execution loop."""
@@ -193,9 +202,10 @@ class StockRiskApplication:
             console.print("[4] Run Genetic Algorithm")
             console.print("[5] View Fuzzy Logic Curves")
             console.print("[6] View Documentation (About)")
-            console.print("[7] Exit")
+            console.print("[7] Generate PDF Research Report")
+            console.print("[8] Exit")
             
-            choice = Prompt.ask("\nSelect option [1-7]", choices=["1", "2", "3", "4", "5", "6", "7"], default="1", console=console)
+            choice = Prompt.ask("\nSelect option [1-8]", choices=["1", "2", "3", "4", "5", "6", "7", "8"], default="1", console=console)
 
             if choice == "1":
                 self.option_run_tests()
@@ -210,6 +220,8 @@ class StockRiskApplication:
             elif choice == "6":
                 self.option_view_about_docs()
             elif choice == "7":
+                self.option_generate_pdf_report()
+            elif choice == "8":
                 console.print("[bold blue]Exiting program. Goodbye![/bold blue]")
                 sys.exit(0)
 
