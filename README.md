@@ -165,15 +165,80 @@ which is close to the noise floor of an inherently unpredictable forward drawdow
 
 ## How to Run
 
-1. **Web Interface**:
-   ```bash
-   streamlit run app.py
-   ```
-2. **Interactive CLI Menu**:
-   ```bash
-   python main.py
-   ```
-3. **Automated Test Suite Execution**:
-   ```bash
-   python test_runner.py
-   ```
+### 1. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+This pulls in the core stack (NumPy, pandas, SciPy, scikit-learn, PyTorch,
+yfinance, matplotlib, Rich, pytest) plus the web UI stack (Streamlit, Plotly)
+and `reportlab` for PDF generation.
+
+### 2. Web Interface (recommended)
+
+```bash
+streamlit run app.py
+```
+
+Opens at **http://localhost:8501** with seven screens: Risk Dashboard, Manual
+Input, Model Training, GA Optimizer, Test Suite, Reports and Documentation.
+
+- **First run trains the model automatically** (~2 minutes) and writes the
+  weights to `data_cache/risk_model_weights.pt`. Until that completes the risk
+  score sits near a constant; the UI says so explicitly. Subsequent runs load
+  the saved weights instantly.
+- Use a different port with `streamlit run app.py --server.port 8502`, or add
+  `--server.headless true` on a remote machine.
+
+### 3. Train or Refit the Model
+
+Training can be started from the **Model Training** page in the web UI (choose
+epochs, watch live progress, export the optimized chromosome). To force a clean
+rebuild from scratch, delete the weights file and restart the app:
+
+```bash
+python -c "import pathlib; pathlib.Path('data_cache/risk_model_weights.pt').unlink(missing_ok=True)"
+```
+
+### 4. Interactive CLI Menu
+
+```bash
+python main.py
+```
+
+Eight menu options: run tests, analyse a company, score custom risk values, run
+the genetic algorithm, view fuzzy curves, read the documentation, generate the
+PDF report, or exit. The CLI shares the same engine modules and the same trained
+weights as the web UI.
+
+### 5. Automated Test Suite
+
+```bash
+python test_runner.py
+```
+
+Runs all **32 unit and integration tests** (metric maths, synthetic data,
+fuzzy forward passes, GA evolution, training regression guards and the
+end-to-end pipeline). Exits non-zero on failure, so it drops straight into CI.
+
+### 6. PDF Research Report
+
+```bash
+python generate_pdf_report.py
+```
+
+Writes `Stock_Market_Risk_Prediction_Report.pdf` to the project root. The same
+report can be compiled and downloaded from the **Reports** screen.
+
+---
+
+### Notes
+
+- **Network fallback** — if `yfinance` cannot be reached, the loader switches to
+  the Merton Jump Diffusion simulator and the UI labels the data as synthetic.
+  Everything downstream (metrics, training, GA) works offline.
+- **Data sources** — Yahoo Finance for price history, Google Finance for live
+  quotes, and Google Sheets for custom series. See *Data sources* above.
+- **Python** — 3.10+ (developed against 3.13). PyTorch is optional at import
+  time; without it the pure-NumPy engine runs, but training is disabled.
