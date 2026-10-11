@@ -97,9 +97,23 @@ class GeneticAlgorithmOptimizer:
                 mutated[idx] += noise
         return mutated
 
-    def optimize(self, X_val: np.ndarray, y_val: np.ndarray) -> Tuple[np.ndarray, List[float]]:
+    def optimize(
+        self,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+        progress_callback=None
+    ) -> Tuple[np.ndarray, List[float]]:
         """
         Runs Evolutionary Genetic Algorithm optimization loop.
+
+        Parameters
+        ----------
+        progress_callback : callable, optional
+            Invoked as ``callback(generation, total_generations, best_fitness)``
+            after every generation. Used by the web UI for live progress bars.
+            Exceptions raised by the callback are swallowed so an UI hiccup can
+            never abort an optimization run.
+
         Returns:
             (best_chromosome, fitness_history)
         """
@@ -118,6 +132,12 @@ class GeneticAlgorithmOptimizer:
                 best_chromosome = population[gen_best_idx].copy()
                 
             fitness_history.append(best_fitness)
+
+            if progress_callback is not None:
+                try:
+                    progress_callback(gen + 1, self.generations, float(best_fitness))
+                except Exception:
+                    pass
 
             # Selection
             selected_pop = self.selection(population, fitness_scores)

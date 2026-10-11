@@ -93,8 +93,12 @@ Historical Volatility (HV) = Standard Deviation of Daily Returns * sqrt(252)
 - **`models/fuzzy_layer.py`**: PyTorch and NumPy TSK Adaptive Neuro-Fuzzy Layer.
 - **`models/deep_neuro_fuzzy_net.py`**: Hybrid Deep Neuro-Fuzzy Neural Network.
 - **`models/genetic_optimizer.py`**: Genetic Algorithm evolutionary optimizer.
+- **`models/train.py`**: Supervised training engine that fits the risk heads on real market history (fixes the previously flat score).
 - **`utils/financial_metrics.py`**: Math engine for Sharpe, MDD, IV, HV, VaR, Sortino.
 - **`utils/visualizer.py`**: Rich terminal UI reporting & Matplotlib graphical plots.
+- **`app.py`**: Streamlit web application entry point (dashboard shell + sidebar navigation).
+- **`ui/`**: Web presentation layer — `services.py` (cached engine wrappers), `components.py` (cards, gauge, pills), `charts.py` (Plotly figures), `styles.py` (blue-only theme), `pages/` (one module per screen).
+- **`.streamlit/config.toml`**: Blue-only theme and server defaults for the web UI.
 - **`tests/`**: Unit & integration test suite (`test_metrics.py`, `test_data.py`, `test_fuzzy.py`, `test_models.py`, `test_ga.py`, `test_pipeline.py`).
 - **`test_runner.py`**: Automated test launcher with visual pass/fail diagnostics.
 - **`main.py`**: Interactive CLI Menu System.
@@ -102,13 +106,70 @@ Historical Volatility (HV) = Standard Deviation of Daily Returns * sqrt(252)
 
 ---
 
+## Web Interface (Streamlit)
+
+The browser UI is a **presentation layer only** — it reuses the exact same engine
+modules as the CLI, so no business logic is duplicated.
+
+| Screen | Purpose |
+|---|---|
+| **Risk Dashboard** | Search a company name, see its live Google Finance quote, then score it with interactive price / drawdown / volatility charts and fuzzy-rule explanations. |
+| **Manual Input** | Slider-based scorer with live re-prediction and regime presets (Defensive → Crisis). |
+| **Model Training** | Fit the risk head on real market history and watch the score spread go from 0.1 to ~65 points. |
+| **GA Optimizer** | Run the evolutionary search with a live progress bar, convergence chart and chromosome export. |
+| **Test Suite** | Execute the full suite in-browser with structured pass/fail results and tracebacks. |
+| **Reports** | Compile the PDF research report and download it, or save it to the project folder. |
+| **Documentation** | Technical manual, README, data-source guide and repository map. |
+
+### Data Sources
+
+- **Company name search** — type anything ("NVIDIA", "JPMorgan", "Costco Wholesale",
+  "brk.b", "TSLA") and it resolves to a ticker automatically, matching a built-in
+  map of ~140 listings and then Google's suggestion service.
+- **Google Finance quote** — each resolved company shows a live price read from
+  the public Google Finance quote page, with its exchange.
+- **Yahoo Finance history** — the full OHLCV series behind the risk metrics, with
+  automatic synthetic fallback when offline.
+- **Google Sheets** — any custom price series. Share the sheet as
+  *File › Share › Anyone with the link › Viewer*, then paste the URL, the
+  `export?format=csv` URL, or just the sheet ID. Only **Date** and one of
+  *Close / Adj Close / Price / Value* are required; *Open / High / Low / Volume*
+  are derived from Close when absent (the UI states this explicitly). At least
+  30 usable rows are required.
+
+### Model Training
+
+The BiLSTM fusion head used to ship with random weights, which made the risk score
+sit at a near-constant value regardless of input. `models/train.py` now fits all
+three heads on real market history:
+
+- **Dataset** — 20-ticker universe, ~24,000 supervised windows. Each window is a
+  20-day metric sequence (Sharpe, Max Drawdown, Implied Vol, Historical Vol) in
+  the same feature domain as the dense vector path.
+- **Targets** — looking 10 days ahead: `future_max_drawdown × 200 + HV × 100`
+  for the score, four risk buckets for the classifier, and the forward-looking
+  drawdown for the regression head.
+- **Persistence** — weights are written to `data_cache/risk_model_weights.pt`, so
+  the CLI and every browser session share one fitted model.
+
+Measured effect on the fixed regime probe: score spread went from **0.1 points**
+(random weights) to **~65 points**, with Defensive ≈ 16 (Low) and Crisis ≈ 81
+(Extreme). Validation accuracy lands near 73% with MAE near 6.4 score points,
+close to the noise floor of an inherently unpredictable forward drawdown.
+
+---
+
 ## How to Run
 
-1. **Automated Test Suite Execution**:
+1. **Web Interface**:
    ```bash
-   python test_runner.py
+   streamlit run app.py
    ```
 2. **Interactive CLI Menu**:
    ```bash
    python main.py
+   ```
+3. **Automated Test Suite Execution**:
+   ```bash
+   python test_runner.py
    ```

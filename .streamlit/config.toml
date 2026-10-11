@@ -1,0 +1,22 @@
+# Streamlit theme for the Stock Market Risk Prediction System.
+# Restricted styling palette: Standard Default and Blue accents only.
+
+[theme]
+base = "light"
+primaryColor = "#1d4ed8"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#eff6ff"
+textColor = "#0f172a"
+font = "sans serif"
+linkColor = "#1d4ed8"
+
+[server]
+headless = true
+maxUploadSize = 50
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = "full"

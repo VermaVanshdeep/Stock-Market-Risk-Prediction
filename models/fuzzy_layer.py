@@ -24,6 +24,29 @@ except Exception:
     TORCH_AVAILABLE = False
 
 
+# Shared linguistic vocabulary used by both engine variants (and the web UI).
+TERM_LABELS = ['Low', 'Medium', 'High']
+FEATURE_KEYS = ['sharpe', 'drawdown', 'implied_vol', 'hist_vol']
+
+
+def build_rule_list(num_rules: int = 16):
+    """
+    Builds the ordered TSK rule base as (sharpe, drawdown, iv, hv) term indices.
+
+    Both the PyTorch and NumPy engines share this exact enumeration order, so the
+    rule index always maps to the same antecedent tuple.
+    """
+    rule_list = []
+    for s_idx in [0, 1, 2]:
+        for d_idx in [0, 2]:
+            for iv_idx in [0, 2]:
+                for hv_idx in [0, 1]:
+                    if len(rule_list) >= num_rules:
+                        return rule_list
+                    rule_list.append((s_idx, d_idx, iv_idx, hv_idx))
+    return rule_list
+
+
 if TORCH_AVAILABLE:
     class PyTorchTakagiSugenoFuzzyLayer(nn.Module):
         """
@@ -66,8 +89,8 @@ if TORCH_AVAILABLE:
             return mu
 
         def evaluate_fuzzification_labels(self, input_vector: np.ndarray) -> Dict[str, str]:
-            terms = ['Low', 'Medium', 'High']
-            feature_names = ['sharpe', 'drawdown', 'implied_vol', 'hist_vol']
+            terms = TERM_LABELS
+            feature_names = FEATURE_KEYS
             x_tensor = torch.tensor(input_vector, dtype=torch.float32).unsqueeze(0)
             
             with torch.no_grad():
@@ -84,13 +107,7 @@ if TORCH_AVAILABLE:
             batch_size = x.size(0)
             mu = self.compute_membership(x)
 
-            rule_list = []
-            for s_idx in [0, 1, 2]:
-                for d_idx in [0, 2]:
-                    for iv_idx in [0, 2]:
-                        for hv_idx in [0, 1]:
-                            if len(rule_list) < self.num_rules:
-                                rule_list.append((s_idx, d_idx, iv_idx, hv_idx))
+            rule_list = build_rule_list(self.num_rules)
             
             firing_strengths = []
             for r_idx, (s_i, d_i, iv_i, hv_i) in enumerate(rule_list):
@@ -149,8 +166,8 @@ else:
             return mu
 
         def evaluate_fuzzification_labels(self, input_vector: np.ndarray) -> Dict[str, str]:
-            terms = ['Low', 'Medium', 'High']
-            feature_names = ['sharpe', 'drawdown', 'implied_vol', 'hist_vol']
+            terms = TERM_LABELS
+            feature_names = FEATURE_KEYS
             mu = self.compute_membership(input_vector)[0]
             
             result = {}
@@ -166,13 +183,7 @@ else:
             batch_size = x.shape[0]
             mu = self.compute_membership(x)
 
-            rule_list = []
-            for s_idx in [0, 1, 2]:
-                for d_idx in [0, 2]:
-                    for iv_idx in [0, 2]:
-                        for hv_idx in [0, 1]:
-                            if len(rule_list) < self.num_rules:
-                                rule_list.append((s_idx, d_idx, iv_idx, hv_idx))
+            rule_list = build_rule_list(self.num_rules)
 
             firing_strengths = []
             for r_idx, (s_i, d_i, iv_i, hv_i) in enumerate(rule_list):

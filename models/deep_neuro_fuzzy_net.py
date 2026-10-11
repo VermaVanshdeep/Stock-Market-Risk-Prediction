@@ -5,7 +5,7 @@ Supports both PyTorch and pure NumPy fallback for seamless cross-platform execut
 """
 
 import numpy as np
-from typing import Tuple, Dict
+from typing import Dict, Optional, Tuple
 from models.fuzzy_layer import PyTorchTakagiSugenoFuzzyLayer, TORCH_AVAILABLE
 from config.settings import MODEL_CONFIG, RISK_CATEGORIES
 
@@ -86,7 +86,10 @@ if TORCH_AVAILABLE:
                 lstm_out, _ = self.bilstm(sequence_inputs)
                 seq_feats = lstm_out[:, -1, :]
             else:
-                dummy_seq = vector_inputs.unsqueeze(1).repeat(1, 10, 1)
+                # Fallback: broadcast the static metric vector across the window
+                # so vector-only inference matches the trained sequence length.
+                window = MODEL_CONFIG.get('sequence_length', 20)
+                dummy_seq = vector_inputs.unsqueeze(1).repeat(1, window, 1)
                 lstm_out, _ = self.bilstm(dummy_seq)
                 seq_feats = lstm_out[:, -1, :]
 
@@ -104,11 +107,28 @@ if TORCH_AVAILABLE:
 
             return risk_score, category_logits, predicted_mdd, fuzzy_info
 
-        def predict_risk(self, vector_inputs: np.ndarray) -> Tuple[float, str, float, Dict[str, str]]:
+        def predict_risk(
+            self,
+            vector_inputs: np.ndarray,
+            sequence_inputs: Optional[np.ndarray] = None
+        ) -> Tuple[float, str, float, Dict[str, str]]:
+            """
+            Scores one instrument.
+
+            ``sequence_inputs`` (shape ``[time_steps, 4]``) is optional; when
+            omitted the vector is broadcast across the window, which preserves
+            the original vector-only behaviour.
+            """
             self.eval()
             with torch.no_grad():
                 x_tensor = torch.tensor(vector_inputs, dtype=torch.float32).unsqueeze(0)
-                risk_score_t, logits_t, mdd_t, _ = self.forward(x_tensor)
+                seq_tensor = None
+                if sequence_inputs is not None:
+                    seq = np.asarray(sequence_inputs, dtype=np.float32)
+                    if seq.ndim == 2:
+                        seq_tensor = torch.tensor(seq, dtype=torch.float32).unsqueeze(0)
+
+                risk_score_t, logits_t, mdd_t, _ = self.forward(x_tensor, seq_tensor)
 
                 risk_score = float(risk_score_t.item())
                 predicted_mdd = float(mdd_t.item())
