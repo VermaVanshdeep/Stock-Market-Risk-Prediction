@@ -46,7 +46,6 @@ from config.settings import DEFAULT_STOCKS, COMPANY_NAME_MAP
 from data.data_loader import StockDataLoader, SyntheticStockGenerator
 from data.feature_extractor import RiskFeatureExtractor
 from models.deep_neuro_fuzzy_net import DeepNeuroFuzzyRiskModel
-from models.genetic_optimizer import GeneticAlgorithmOptimizer
 from utils.visualizer import (
     print_project_header,
     display_metrics_table,
@@ -153,29 +152,125 @@ class StockRiskApplication:
         display_risk_prediction(risk_score, category, pred_mdd, fuzzy_labels)
 
     def option_run_ga_optimization(self):
-        """Option 4: Run Genetic Algorithm."""
+        """Option 4: Run Genetic Algorithm Optimizer.
+
+        Uses optimize_model() which:
+          - builds validation data from the trained model's feature space
+          - runs the 24-gene GA (12 MF centres + 12 MF spreads)
+          - applies best chromosome only when it beats the baseline
+          - never exposes the held-out test split to the GA
+        """
         console.print(Panel("[bold blue]GENETIC ALGORITHM OPTIMIZER[/bold blue]", border_style="blue"))
-        
-        pop_size = IntPrompt.ask("Population Size", default=15, console=console)
+
+        pop_size   = IntPrompt.ask("Population Size",       default=15, console=console)
         generations = IntPrompt.ask("Number of Generations", default=10, console=console)
 
-        # Generate sample validation data
-        np.random.seed(42)
-        X_val = np.random.uniform(0.05, 0.5, size=(30, 4))
-        y_val = np.random.uniform(10, 90, size=30)
+        from models.genetic_optimizer import optimize_model
+        from models.train import build_dataset, TRAINING_UNIVERSE
 
-        ga = GeneticAlgorithmOptimizer(population_size=pop_size, generations=generations)
-        best_chromo, history = ga.optimize(X_val, y_val)
+        console.print("[bold blue]Building offline validation dataset…[/bold blue]")
+        try:
+            dataset = build_dataset(
+                tickers=TRAINING_UNIVERSE[:6],
+                period="5y",
+                allow_network=True,
+            )
+        except Exception as e:
+            console.print(f"[bold blue]Network fetch failed ({e}), using offline fallback.[/bold blue]")
+            dataset = build_dataset(
+                tickers=["OFFLINE_A", "OFFLINE_B", "OFFLINE_C"],
+                allow_network=False,
+            )
 
-        console.print(f"[bold blue]Optimized Weights: {best_chromo[24:28].round(4)}[/bold blue]")
+        console.print("[bold blue]Running GA optimisation…[/bold blue]")
+        result = optimize_model(
+            self.model,
+            dataset,
+            population_size=pop_size,
+            generations=generations,
+            seed=42,
+        )
+
+        meta      = result["metadata"]
+        best_chromo = result["chromosome"]
+
+        console.print(f"[bold blue]GA complete.[/bold blue]")
+        console.print(f"  Baseline fitness : {meta['baseline_fitness']:.6f}")
+        console.print(f"  Best fitness     : {meta['best_fitness']:.6f}")
+        console.print(f"  Improved         : {meta['improved']}")
+        console.print(f"  Chromosome genes : {len(best_chromo)} (12 MF centres + 12 MF spreads)")
+
+        # Display the 12 optimised centres (genes 0-11) rounded for readability
+        centres = best_chromo[:12].reshape(4, 3).round(4)
+        spreads = best_chromo[12:24].reshape(4, 3).round(4)
+        feature_labels = ["Sharpe", "Drawdown", "ImpliedVol", "HistVol"]
+        console.print("[bold blue]Optimised Membership Centres (Low / Med / High):[/bold blue]")
+        for i, label in enumerate(feature_labels):
+            console.print(f"  {label:<12} {centres[i]}")
+        console.print("[bold blue]Optimised Membership Spreads  (Low / Med / High):[/bold blue]")
+        for i, label in enumerate(feature_labels):
+            console.print(f"  {label:<12} {spreads[i]}")
+
+    def option_run_hybrid_ga_gp(self):
+        """Option 5: Run GA + GP Hybrid Pipeline."""
+        from models.train import build_dataset, TRAINING_UNIVERSE
+        from models.hybrid_pipeline import run_hybrid_pipeline
+        from config.settings import GA_CONFIG
+        from models.genetic_programming import GP_CONFIG
+
+        console.print("\n[bold blue]Hybrid GA + GP Pipeline[/bold blue]")
+        pop_ga  = IntPrompt.ask("GA population size",  default=GA_CONFIG["population_size"], console=console)
+        gen_ga  = IntPrompt.ask("GA generations",      default=GA_CONFIG["generations"],      console=console)
+        pop_gp  = IntPrompt.ask("GP population size",  default=30,  console=console)
+        gen_gp  = IntPrompt.ask("GP generations",      default=10,  console=console)
+
+        console.print("[bold blue]Building dataset…[/bold blue]")
+        try:
+            dataset = build_dataset(
+                tickers=TRAINING_UNIVERSE[:6], period="5y", allow_network=True
+            )
+        except Exception as exc:
+            console.print(f"[bold blue]Network failed ({exc}), using offline data.[/bold blue]")
+            dataset = build_dataset(
+                tickers=["OFFLINE_A", "OFFLINE_B", "OFFLINE_C"], allow_network=False
+            )
+
+        ga_cfg = dict(GA_CONFIG)
+        ga_cfg["population_size"] = pop_ga
+        ga_cfg["generations"]     = gen_ga
+
+        gp_cfg = dict(GP_CONFIG)
+        gp_cfg["population_size"] = pop_gp
+        gp_cfg["generations"]     = gen_gp
+        gp_cfg["max_depth"]       = 5
+        gp_cfg["max_nodes"]       = 63
+
+        console.print("[bold blue]Running GA → GP pipeline…[/bold blue]")
+        result = run_hybrid_pipeline(
+            self.model, dataset,
+            ga_config=ga_cfg, gp_config=gp_cfg,
+            seed=42,
+            ga_progress=lambda g, t, f: console.print(
+                f"  GA gen {g:3d}/{t}  fitness={f:.6f}") if g == t or g % 5 == 0 else None,
+            gp_progress=lambda g, t, f: console.print(
+                f"  GP gen {g:3d}/{t}  val_fit={f:.6f}") if g == t or g % 5 == 0 else None,
+        )
+
+        console.print("\n" + result.summary())
+        expr_str = self.model.gp_expression_string
+        if expr_str != "(none)":
+            console.print(f"[bold blue]GP expression attached to model: YES[/bold blue]")
+            console.print(f"  {expr_str[:120]}")
+        else:
+            console.print("[bold blue]GP expression: not attached[/bold blue]")
 
     def option_view_fuzzy_curves(self):
-        """Option 5: View Fuzzy Logic Curves."""
+        """Option 6: View Fuzzy Logic Curves."""
         console.print("[bold blue]Plotting Fuzzy Logic Membership Curves...[/bold blue]")
         plot_fuzzy_membership_functions()
 
     def option_view_about_docs(self):
-        """Option 6: View Documentation."""
+        """Option 7: View Documentation."""
         try:
             about_path = Path(__file__).resolve().parent / "ABOUT.md"
             with open(about_path, "r", encoding="utf-8") as f:
@@ -199,13 +294,18 @@ class StockRiskApplication:
             console.print("[1] Run Tests")
             console.print("[2] Check Risk by Company Name")
             console.print("[3] Input Custom Risk Values (Sharpe, Drawdown, IV, HV)")
-            console.print("[4] Run Genetic Algorithm")
-            console.print("[5] View Fuzzy Logic Curves")
-            console.print("[6] View Documentation (About)")
-            console.print("[7] Generate PDF Research Report")
-            console.print("[8] Exit")
+            console.print("[4] Run Genetic Algorithm (GA only)")
+            console.print("[5] Run GA + GP Hybrid Pipeline")
+            console.print("[6] View Fuzzy Logic Curves")
+            console.print("[7] View Documentation (About)")
+            console.print("[8] Generate PDF Research Report")
+            console.print("[9] Exit")
             
-            choice = Prompt.ask("\nSelect option [1-8]", choices=["1", "2", "3", "4", "5", "6", "7", "8"], default="1", console=console)
+            choice = Prompt.ask(
+                "\nSelect option [1-9]",
+                choices=["1","2","3","4","5","6","7","8","9"],
+                default="1", console=console
+            )
 
             if choice == "1":
                 self.option_run_tests()
@@ -216,12 +316,14 @@ class StockRiskApplication:
             elif choice == "4":
                 self.option_run_ga_optimization()
             elif choice == "5":
-                self.option_view_fuzzy_curves()
+                self.option_run_hybrid_ga_gp()
             elif choice == "6":
-                self.option_view_about_docs()
+                self.option_view_fuzzy_curves()
             elif choice == "7":
-                self.option_generate_pdf_report()
+                self.option_view_about_docs()
             elif choice == "8":
+                self.option_generate_pdf_report()
+            elif choice == "9":
                 console.print("[bold blue]Exiting program. Goodbye![/bold blue]")
                 sys.exit(0)
 

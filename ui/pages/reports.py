@@ -93,6 +93,45 @@ def render() -> None:
         )
 
     st.divider()
+    section_title("Project Presentation (PowerPoint)", "8-slide widescreen presentation prepared for faculty review.")
+
+    pptx_path = services.ROOT / "Stock_Market_Risk_Prediction_Presentation.pptx"
+    if pptx_path.exists():
+        pptx_stat = pptx_path.stat()
+        render_cards(
+            [
+                {
+                    "eyebrow": "Presentation Deck",
+                    "value": f"{pptx_stat.st_size / 1024:.0f} KB",
+                    "hint": "8 slides · Dark financial dashboard theme.",
+                },
+                {
+                    "eyebrow": "Format",
+                    "value": "PPTX · 16:9 Widescreen",
+                    "hint": "Editable shapes, diagrams and charts.",
+                },
+                {
+                    "eyebrow": "Target Audience",
+                    "value": "Faculty Review",
+                    "hint": "Simple, intuitive & visual project explanation.",
+                },
+            ],
+            columns=3,
+        )
+        st.write("")
+        with open(pptx_path, "rb") as f:
+            pptx_bytes = f.read()
+
+        st.download_button(
+            "⬇️ Download PowerPoint Presentation (.pptx)",
+            data=pptx_bytes,
+            file_name="Stock_Market_Risk_Prediction_Presentation.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            type="primary",
+            width="stretch",
+        )
+
+    st.divider()
     section_title("What's inside", "Sections compiled into the document.")
 
     callout(

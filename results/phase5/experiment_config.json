@@ -1,0 +1,27 @@
+{
+  "universe": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "JPM",
+    "XOM",
+    "WMT",
+    "GOOGL",
+    "TSLA"
+  ],
+  "seeds": [
+    42,
+    101,
+    202,
+    303,
+    404
+  ],
+  "epochs": 10,
+  "ga_population": 16,
+  "ga_generations": 10,
+  "gp_population": 40,
+  "gp_generations": 12,
+  "sequence_length": 20,
+  "horizon": 10,
+  "purge_embargo_buffer_days": 30
+}

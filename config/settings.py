@@ -83,7 +83,7 @@ COMPANY_NAME_MAP = {
     "AMZN": "Amazon.com Inc.",
     "META": "Meta Platforms Inc.",
     "NVDA": "NVIDIA Corporation",
-    "TSLA": "Tesla Inc.",
+    "TSLA": "Tesla",
     "NFLX": "Netflix Inc.",
     "AMD": "Advanced Micro Devices Inc.",
     "INTC": "Intel Corporation",
@@ -112,7 +112,7 @@ COMPANY_NAME_MAP = {
     "SAP": "SAP SE",
     "NVO": "Novo Nordisk A/S",
     # Consumer / retail / staples
-    "WMT": "Walmart Inc.",
+    "WMT": "Walmart",
     "COST": "Costco Wholesale Corp.",
     "HD": "Home Depot Inc.",
     "LOW": "Lowe's Companies Inc.",
@@ -143,7 +143,7 @@ COMPANY_NAME_MAP = {
     "VRTX": "Vertex Pharmaceuticals",
     "REGN": "Regeneron Pharmaceuticals",
     # Financials
-    "JPM": "JPMorgan Chase & Co.",
+    "JPM": "JPMorgan Chase",
     "BAC": "Bank of America Corp.",
     "WFC": "Wells Fargo & Company",
     "GS": "Goldman Sachs Group",
@@ -156,7 +156,7 @@ COMPANY_NAME_MAP = {
     "BLK": "BlackRock Inc.",
     "SPGI": "S&P Global Inc.",
     # Energy / industrials / materials
-    "XOM": "Exxon Mobil Corporation",
+    "XOM": "ExxonMobil",
     "CVX": "Chevron Corporation",
     "COP": "ConocoPhillips",
     "SLB": "Schlumberger N.V.",
@@ -206,6 +206,15 @@ COMPANY_NAME_MAP = {
     "TM": "Toyota Motor Corp.",
     "UL": "Unilever PLC",
     "HSBA": "HSBC Holdings plc",
+    # Indian Stocks (NSE)
+    "RELIANCE.NS": "Reliance Industries Ltd.",
+    "TCS.NS": "Tata Consultancy Services Ltd.",
+    "INFY.NS": "Infosys Ltd.",
+    "HDFCBANK.NS": "HDFC Bank Ltd.",
+    "ICICIBANK.NS": "ICICI Bank Ltd.",
+    "SBIN.NS": "State Bank of India",
+    "ITC.NS": "ITC Ltd.",
+    "TATAMOTORS.NS": "Tata Motors Ltd.",
 }
 
 # Which Google Finance exchange carries each listing (used for live quotes).
@@ -230,6 +239,16 @@ TICKER_EXCHANGE = {
     "T": "NYSE", "VZ": "NYSE", "CMCSA": "NASDAQ", "TMUS": "NASDAQ",
     "BAC": "NYSE", "WFC": "NYSE", "SNY": "NYSE", "NVS": "NYSE",
     "SAP": "NYSE", "ASML": "NASDAQ", "NVO": "NYSE", "TM": "NYSE",
+    "TSLA": "NASDAQ",
+    # Indian Listings (NSE)
+    "RELIANCE.NS": "NSE",
+    "TCS.NS": "NSE",
+    "INFY.NS": "NSE",
+    "HDFCBANK.NS": "NSE",
+    "ICICIBANK.NS": "NSE",
+    "SBIN.NS": "NSE",
+    "ITC.NS": "NSE",
+    "TATAMOTORS.NS": "NSE",
 }
 
 DEFAULT_EXCHANGE = "NASDAQ"
@@ -240,10 +259,22 @@ TICKER_ALIASES = {
     "BF.B": "BF-B",
 }
 
-# Popular presets shown in the dashboard picker.
+# Popular presets shown in the dashboard quick-select picker (10 demonstration stocks).
 FEATURED_STOCKS = [
     "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META",
-    "TSLA", "SPY", "QQQ", "JPM", "XOM", "COST",
+    "JPM", "WMT", "XOM", "TSLA",
+]
+
+# Major Indian benchmark presets (NSE listed).
+NSE_FEATURED_STOCKS = [
+    "RELIANCE.NS",
+    "TCS.NS",
+    "INFY.NS",
+    "HDFCBANK.NS",
+    "ICICIBANK.NS",
+    "SBIN.NS",
+    "ITC.NS",
+    "TATAMOTORS.NS",
 ]
 
 DEFAULT_STOCKS = [
@@ -253,10 +284,42 @@ DEFAULT_STOCKS = [
     "Alphabet Inc. Class A (GOOGL)",
     "Amazon.com Inc. (AMZN)",
     "Meta Platforms Inc. (META)",
-    "Tesla Inc. (TSLA)",
+    "JPMorgan Chase (JPM)",
+    "Walmart (WMT)",
+    "ExxonMobil (XOM)",
+    "Tesla (TSLA)",
     "S&P 500 ETF (SPY)",
     "Nasdaq-100 ETF (QQQ)",
-    "JPMorgan Chase & Co. (JPM)",
-    "Exxon Mobil Corporation (XOM)",
-    "Costco Wholesale Corp. (COST)"
+    "Costco Wholesale Corp. (COST)",
+    # Indian market selections
+    "Reliance Industries Ltd. (RELIANCE.NS)",
+    "Tata Consultancy Services Ltd. (TCS.NS)",
+    "Infosys Ltd. (INFY.NS)",
+    "HDFC Bank Ltd. (HDFCBANK.NS)",
+    "ICICI Bank Ltd. (ICICIBANK.NS)",
+    "State Bank of India (SBIN.NS)",
+    "ITC Ltd. (ITC.NS)",
+    "Tata Motors Ltd. (TATAMOTORS.NS)",
 ]
+
+
+def get_currency_config(ticker: str) -> dict:
+    """
+    Central currency configuration resolver for market assets.
+    Returns:
+      - 'code': currency ISO code ('INR' or 'USD')
+      - 'symbol': display currency symbol ('₹' or '$')
+      - 'locale': formatting locale tag ('en_IN' or 'en_US')
+    """
+    sym = (ticker or "").strip().upper()
+    if sym.endswith(".NS") or sym.endswith(".BO"):
+        return {
+            "code": "INR",
+            "symbol": "₹",
+            "locale": "en_IN",
+        }
+    return {
+        "code": "USD",
+        "symbol": "$",
+        "locale": "en_US",
+    }

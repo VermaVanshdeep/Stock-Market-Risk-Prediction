@@ -1,0 +1,118 @@
+{
+  "total_samples": 4704,
+  "splits": {
+    "train": {
+      "count": 3640,
+      "min_date": "2023-12-27",
+      "max_date": "2025-10-20",
+      "ticker_counts": {
+        "AAPL": 455,
+        "MSFT": 455,
+        "NVDA": 455,
+        "JPM": 455,
+        "XOM": 455,
+        "WMT": 455,
+        "GOOGL": 455,
+        "TSLA": 455
+      }
+    },
+    "val": {
+      "count": 416,
+      "min_date": "2026-01-14",
+      "max_date": "2026-03-30",
+      "ticker_counts": {
+        "AAPL": 52,
+        "MSFT": 52,
+        "NVDA": 52,
+        "JPM": 52,
+        "XOM": 52,
+        "WMT": 52,
+        "GOOGL": 52,
+        "TSLA": 52
+      }
+    },
+    "test": {
+      "count": 648,
+      "min_date": "2026-06-24",
+      "max_date": "2026-10-16",
+      "ticker_counts": {
+        "AAPL": 81,
+        "MSFT": 81,
+        "NVDA": 81,
+        "JPM": 81,
+        "XOM": 81,
+        "WMT": 81,
+        "GOOGL": 81,
+        "TSLA": 81
+      }
+    }
+  },
+  "tickers": {
+    "AAPL": {
+      "total": 588,
+      "train": 455,
+      "val": 52,
+      "test": 81,
+      "is_synthetic": false,
+      "sector": "Information Technology"
+    },
+    "MSFT": {
+      "total": 588,
+      "train": 455,
+      "val": 52,
+      "test": 81,
+      "is_synthetic": false,
+      "sector": "Information Technology"
+    },
+    "NVDA": {
+      "total": 588,
+      "train": 455,
+      "val": 52,
+      "test": 81,
+      "is_synthetic": false,
+      "sector": "Information Technology"
+    },
+    "JPM": {
+      "total": 588,
+      "train": 455,
+      "val": 52,
+      "test": 81,
+      "is_synthetic": false,
+      "sector": "Financials"
+    },
+    "XOM": {
+      "total": 588,
+      "train": 455,
+      "val": 52,
+      "test": 81,
+      "is_synthetic": false,
+      "sector": "Energy"
+    },
+    "WMT": {
+      "total": 588,
+      "train": 455,
+      "val": 52,
+      "test": 81,
+      "is_synthetic": false,
+      "sector": "Consumer Staples"
+    },
+    "GOOGL": {
+      "total": 588,
+      "train": 455,
+      "val": 52,
+      "test": 81,
+      "is_synthetic": false,
+      "sector": "Communication Services"
+    },
+    "TSLA": {
+      "total": 588,
+      "train": 455,
+      "val": 52,
+      "test": 81,
+      "is_synthetic": false,
+      "sector": "Consumer Discretionary"
+    }
+  },
+  "sectors": {},
+  "is_real_market": true
+}

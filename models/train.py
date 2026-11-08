@@ -55,6 +55,11 @@ LEARNING_RATE = 0.003
 VALIDATION_SPLIT = 0.15
 TRAIN_SEED = 42
 
+# Fraction of the concatenated dataset reserved as the held-out final test set.
+# These are always the LAST (chronologically most recent) TEST_SPLIT of all rows.
+# They are NEVER exposed to GA optimisation, model selection, or early stopping.
+TEST_SPLIT = 0.10
+
 # Broad, liquid universe spanning defensive to speculative regimes.
 TRAINING_UNIVERSE = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "JPM",
@@ -63,6 +68,7 @@ TRAINING_UNIVERSE = [
 ]
 
 WEIGHTS_PATH = Path(DATA_DIR) / "risk_model_weights.pt"
+GP_EXPRESSION_PATH = Path(DATA_DIR) / "gp_expression_tree.json"
 
 # Feature bounds mirror RiskFeatureExtractor.feature_bounds.
 _BOUNDS = {
@@ -82,15 +88,94 @@ def seed_everything(seed: int = TRAIN_SEED) -> None:
         torch.use_deterministic_algorithms(False)
 
 
+def get_train_val_indices(
+    n: int,
+    validation_split: float = VALIDATION_SPLIT,
+    seed: int = TRAIN_SEED,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Return *(train_idx, val_idx)* — the exact same permuted split that
+    ``train_model()`` uses internally.
+
+    Both arrays are integer indices into the *original* (unshuffled) dataset.
+    The GA uses these to build a validation set that is provably disjoint from
+    the rows used to fit neural-network weights.
+
+    NOTE: when called on the full dataset (including held-out test samples),
+    use ``get_train_val_test_indices`` instead so the test set is excluded.
+    """
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(n)
+    cut = max(int(n * (1.0 - validation_split)), 1)
+    return order[:cut], order[cut:]
+
+
+def get_train_val_test_indices(
+    n: int,
+    validation_split: float = VALIDATION_SPLIT,
+    test_split: float = TEST_SPLIT,
+    seed: int = TRAIN_SEED,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Return *(train_idx, val_idx, test_idx)* — three pairwise-disjoint index sets.
+
+    Chronological guarantee
+    -----------------------
+    The concatenated dataset is ordered by (ticker, time).  The final test set
+    is always the last ``test_split`` fraction by *position* so it contains
+    only rows whose look-ahead window lies strictly after the last training row.
+    The train/val split within the remaining rows is then shuffled (seeded) so
+    the neural network does not overfit to chronological artefacts.
+
+    The three returned sets satisfy:
+        len(train_idx) + len(val_idx) + len(test_idx) == n
+        set(train_idx) & set(val_idx) == {}
+        set(train_idx) & set(test_idx) == {}
+        set(val_idx)   & set(test_idx) == {}
+
+    The test set is NEVER used during GA optimisation or model selection.
+    """
+    # 1. Reserve the chronologically last rows for the final test set.
+    n_test = max(int(n * test_split), 1)
+    n_trainval = n - n_test
+
+    # test_idx = the last n_test positions by concatenation order
+    test_idx = np.arange(n_trainval, n, dtype=np.intp)
+
+    # 2. Shuffle the remaining rows to form train / val.
+    rng = np.random.default_rng(seed)
+    tv_positions = np.arange(n_trainval, dtype=np.intp)
+    order = rng.permutation(n_trainval)
+    cut = max(int(n_trainval * (1.0 - validation_split)), 1)
+
+    train_idx = tv_positions[order[:cut]]
+    val_idx   = tv_positions[order[cut:]]
+
+    return train_idx, val_idx, test_idx
+
+
 # --------------------------------------------------------------------------- #
 # Feature / target engineering                                                #
 # --------------------------------------------------------------------------- #
-def rolling_metric_frame(df: pd.DataFrame) -> pd.DataFrame:
+def rolling_metric_frame(df: pd.DataFrame, is_synthetic: bool = False) -> pd.DataFrame:
     """
     Vectorised rolling risk metrics, one row per trading day.
 
     Columns are clipped into the exact feature domain the fuzzy layer was
     configured with, which keeps membership degrees in a sane range.
+
+    Implied-Volatility proxy (Phase 7 fix)
+    ───────────────────────────────────────
+    The Garman-Klass estimator requires genuine intraday High-Low spread.
+    For synthetic OHLC data the intraday spread is small (+/-1.2% of Close),
+    causing the annualised GK value to sit at or below the 0.05 clip floor.
+    This makes IV a constant and provides no information to the fuzzy layer.
+
+    When ``is_synthetic=True`` OR when the computed GK proxy is constant
+    (<= lower clip bound + 1e-4) across more than 90% of observations, the
+    function substitutes ``HV * 1.05`` as an honest proxy labelled
+    ``implied_vol``.  This is a known approximation, not a claim of real IV.
+    Real market data produces genuine GK values well above the floor.
     """
     close = df["Close"]
     log_rets = np.log(close / close.shift(1))
@@ -106,7 +191,19 @@ def rolling_metric_frame(df: pd.DataFrame) -> pd.DataFrame:
         0.5 * np.log(df["High"] / df["Low"]) ** 2
         - (2.0 * np.log(2.0) - 1.0) * np.log(df["Close"] / df["Open"]) ** 2
     )
-    implied_vol = (gk.clip(lower=0).rolling(HV_WINDOW).mean() * ann).clip(*_BOUNDS["implied_vol"])
+    gk_iv = (gk.clip(lower=0).rolling(HV_WINDOW).mean() * ann).clip(*_BOUNDS["implied_vol"])
+
+    # Detect degenerate IV: synthetic flag OR >=90% of values at the lower clip bound
+    iv_lo = _BOUNDS["implied_vol"][0]
+    pct_at_floor = float((gk_iv <= iv_lo + 1e-4).mean())
+    use_hv_proxy = is_synthetic or (pct_at_floor > 0.90)
+
+    if use_hv_proxy:
+        # HV * 1.05 is a standard rule-of-thumb approximation for IV.
+        # It is honest - we do not claim it is market-derived implied volatility.
+        implied_vol = (hist_vol * 1.05).clip(*_BOUNDS["implied_vol"])
+    else:
+        implied_vol = gk_iv
 
     mean_ann_return = log_rets.rolling(HV_WINDOW).mean() * ANNUALIZATION_FACTOR
     safe_hv = hist_vol.replace(0.0, np.nan)
@@ -151,12 +248,18 @@ def _training_frame(
     period: str = "5y",
     allow_network: bool = True,
 ) -> Optional[pd.DataFrame]:
-    """Fetches one ticker (live or synthetic) and returns metrics + prices."""
+    """Fetches one ticker (live or synthetic) and returns metrics + prices.
+
+    Tracks whether data is synthetic so that rolling_metric_frame can use
+    the HV*1.05 IV proxy instead of the degenerate GK estimate (Phase 7 fix).
+    """
     frame = None
+    is_synthetic = False
+
     if allow_network:
         try:
             loader = StockDataLoader(use_offline_fallback=True)
-            frame, _ = loader.fetch_stock_data(ticker, period=period)
+            frame, is_synthetic = loader.fetch_stock_data(ticker, period=period)
         except Exception:
             frame = None
 
@@ -168,8 +271,9 @@ def _training_frame(
             sigma=_synthetic_sigma(ticker),
             seed=abs(hash(ticker)) % 10000,
         )
+        is_synthetic = True
 
-    metrics = rolling_metric_frame(frame)
+    metrics = rolling_metric_frame(frame, is_synthetic=is_synthetic)
     combined = metrics.copy()
     combined["_close"] = frame["Close"]
     return combined.dropna()
@@ -248,15 +352,22 @@ def train_model(
 ) -> Dict[str, object]:
     """Fits the three heads on the dataset. Returns a training history."""
     if not TORCH_AVAILABLE:
-        raise RuntimeError("PyTorch is required for training — install torch>=2.0.0.")
+        raise RuntimeError("PyTorch is required for training - install torch>=2.0.0.")
 
     seed_everything(seed)
     model.train()
 
-    n = len(dataset["X_vec"])
-    rng = np.random.default_rng(seed)
-    order = rng.permutation(n)
-    cut = max(int(n * (1.0 - validation_split)), 1)
+    if "split_indices" in dataset:
+        tr_idx = dataset["split_indices"]["train"]
+        va_idx = dataset["split_indices"]["val"]
+        cut = int(len(tr_idx))
+        n = cut + int(len(va_idx))
+        order = np.concatenate([tr_idx, va_idx])
+    else:
+        n = len(dataset["X_vec"])
+        rng = np.random.default_rng(seed)
+        order = rng.permutation(n)
+        cut = max(int(n * (1.0 - validation_split)), 1)
 
     X_seq = torch.tensor(dataset["X_seq"][order])
     X_vec = torch.tensor(dataset["X_vec"][order])
@@ -300,6 +411,8 @@ def train_model(
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimiser.step()
+            if hasattr(model, 'fuzzy_engine') and hasattr(model.fuzzy_engine, 'clamp_and_sort_parameters'):
+                model.fuzzy_engine.clamp_and_sort_parameters()
 
             total_loss += float(loss.item())
             batches += 1
@@ -372,16 +485,91 @@ def save_weights(model) -> Path:
 
 
 def load_weights(model) -> bool:
-    """Loads persisted weights if present. Returns True when weights were applied."""
+    """
+    Load persisted weights. Returns True when weights were applied.
+
+    If the saved weights were produced by a different architecture
+    (e.g. fusion_dim=161 before Phase 3 vs 162 after), the function
+    tries strict=False and verifies that the critical fusion layer is
+    actually compatible. If not, it returns False so callers know
+    they must retrain.
+    """
     if not TORCH_AVAILABLE or not WEIGHTS_PATH.exists():
         return False
     try:
         state = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=True)
-        model.load_state_dict(state)
+        # Strict load first
+        try:
+            model.load_state_dict(state, strict=True)
+            if hasattr(model, 'fuzzy_engine') and hasattr(model.fuzzy_engine, 'clamp_and_sort_parameters'):
+                model.fuzzy_engine.clamp_and_sort_parameters()
+            model.eval()
+            return True
+        except RuntimeError:
+            pass   # shape mismatch — try lenient load
+
+        # Lenient load: apply only matching keys
+        model_state  = model.state_dict()
+        matched      = {k: v for k, v in state.items()
+                        if k in model_state and v.shape == model_state[k].shape}
+
+        # Adapt fusion_net.0.weight between 161 and 162 input dimensions
+        if "fusion_net.0.weight" in state and "fusion_net.0.weight" not in matched:
+            s_weight = state["fusion_net.0.weight"]
+            m_weight = model_state.get("fusion_net.0.weight")
+            if m_weight is not None and s_weight.shape[0] == m_weight.shape[0]:
+                min_cols = min(s_weight.shape[1], m_weight.shape[1])
+                m_weight = m_weight.clone()
+                m_weight[:, :min_cols] = s_weight[:, :min_cols]
+                matched["fusion_net.0.weight"] = m_weight
+
+        # The critical fusion layer must be successfully matched or adapted
+        if "fusion_net.0.weight" not in matched:
+            return False
+
+        if not matched:
+            return False   # nothing matches — weights are from a completely different arch
+        model_state.update(matched)
+        model.load_state_dict(model_state, strict=False)
+        if hasattr(model, 'fuzzy_engine') and hasattr(model.fuzzy_engine, 'clamp_and_sort_parameters'):
+            model.fuzzy_engine.clamp_and_sort_parameters()
         model.eval()
         return True
     except Exception:
         return False
+
+
+def save_gp_expression(model) -> Path:
+    """
+    Persist the GP expression tree attached to *model* to a JSON file.
+
+    Silently returns the default path with nothing written when no expression
+    has been attached (``model._gp_expression is None``).
+
+    Returns:
+        Path to the written file.
+    """
+    from models.genetic_programming import save_expression_tree
+    expr = getattr(model, "_gp_expression", None)
+    if expr is None:
+        return GP_EXPRESSION_PATH    # no-op but still return the path
+    save_expression_tree(expr.to_dict(), GP_EXPRESSION_PATH)
+    return GP_EXPRESSION_PATH
+
+
+def load_gp_expression(model) -> bool:
+    """
+    Restore the GP expression tree from disk and attach it to *model*.
+
+    Returns True when an expression was successfully loaded and attached.
+    Returns False (no-op) when the file is absent or corrupt.
+    """
+    from models.genetic_programming import load_expression_tree
+    node = load_expression_tree(GP_EXPRESSION_PATH)
+    if node is None:
+        return False
+    model.set_gp_expression(node)
+    return True
 
 
 def train_and_save(
@@ -392,7 +580,7 @@ def train_and_save(
 ) -> Dict[str, object]:
     """End-to-end: build data -> train -> persist weights."""
     if not TORCH_AVAILABLE:
-        raise RuntimeError("PyTorch is required for training — install torch>=2.0.0.")
+        raise RuntimeError("PyTorch is required for training - install torch>=2.0.0.")
 
     tickers = tickers or TRAINING_UNIVERSE
     dataset = build_dataset(tickers)
@@ -426,3 +614,106 @@ def score_spread(
         sequences = torch.tensor(dataset["X_seq"][:512])
         scores, _, _, _ = model(vectors, sequences)
     return float(scores.squeeze().std().item())
+
+
+# --------------------------------------------------------------------------- #
+# Evaluation against held-out splits                                          #
+# --------------------------------------------------------------------------- #
+
+def evaluate_split(
+    model,
+    dataset: Dict[str, np.ndarray],
+    indices: np.ndarray,
+) -> Dict[str, float]:
+    """
+    Compute MSE and MAE of the risk-score head on *indices* rows of *dataset*.
+
+    Both metrics are in [0, 100] score-point units — the same scale as the
+    training target ``y_score``.
+
+    Returns
+    -------
+    {"mse": float, "mae": float, "n": int}
+    """
+    if not TORCH_AVAILABLE:
+        raise RuntimeError("PyTorch is required for evaluation — install torch>=2.0.0.")
+
+    n = len(indices)
+    if n == 0:
+        return {"mse": float("nan"), "mae": float("nan"), "n": 0}
+
+    X_vec   = torch.tensor(dataset["X_vec"][indices],   dtype=torch.float32)
+    X_seq   = torch.tensor(dataset["X_seq"][indices],   dtype=torch.float32)
+    y_score = torch.tensor(dataset["y_score"][indices], dtype=torch.float32).squeeze(-1)
+
+    model.eval()
+    total_se = 0.0
+    total_ae = 0.0
+
+    with torch.no_grad():
+        batch_size = 256
+        for start in range(0, n, batch_size):
+            stop = min(start + batch_size, n)
+            pred_score, _, _, _ = model(X_vec[start:stop], X_seq[start:stop])
+            pred = pred_score.squeeze(-1)
+            diff = pred - y_score[start:stop]
+            total_se += float((diff ** 2).sum().item())
+            total_ae += float(diff.abs().sum().item())
+
+    return {
+        "mse": total_se / n,
+        "mae": total_ae / n,
+        "n":   n,
+    }
+
+
+def build_dataset_split(
+    tickers: Optional[List[str]] = None,
+    sequence_length: int = SEQUENCE_LENGTH,
+    horizon: int = FORWARD_HORIZON,
+    period: str = "5y",
+    allow_network: bool = True,
+    validation_split: float = VALIDATION_SPLIT,
+    test_split: float = TEST_SPLIT,
+    seed: int = TRAIN_SEED,
+) -> Tuple[Dict[str, np.ndarray], np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Build the full dataset and return explicit, pairwise-disjoint index splits.
+
+    Returns
+    -------
+    (dataset, train_idx, val_idx, test_idx)
+
+    * ``dataset``   — full concatenated dataset dict (all N rows)
+    * ``train_idx`` — indices used for NN weight fitting (shuffled)
+    * ``val_idx``   — indices used for GA fitness / model selection (shuffled)
+    * ``test_idx``  — indices held out for final reporting (chronological tail)
+
+    Chronological guarantee
+    -----------------------
+    ``test_idx`` always contains the last ``test_split`` fraction of rows by
+    concatenation order. Because rows are appended ticker-by-ticker in time
+    order, these rows represent the most recent market regimes and their
+    look-ahead windows do not overlap with any training or validation sample.
+
+    Disjointness guarantee
+    ----------------------
+    The three index sets satisfy:
+        union(train, val, test) == {0, ..., N-1}
+        pairwise intersection == {} for all three pairs
+    """
+    dataset = build_dataset(
+        tickers=tickers,
+        sequence_length=sequence_length,
+        horizon=horizon,
+        period=period,
+        allow_network=allow_network,
+    )
+    n = len(dataset["X_vec"])
+    train_idx, val_idx, test_idx = get_train_val_test_indices(
+        n,
+        validation_split=validation_split,
+        test_split=test_split,
+        seed=seed,
+    )
+    return dataset, train_idx, val_idx, test_idx

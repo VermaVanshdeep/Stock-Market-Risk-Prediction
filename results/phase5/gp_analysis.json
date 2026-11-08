@@ -1,0 +1,72 @@
+[
+  {
+    "seed": 42,
+    "expression": "(sqrt(3.917) * (((3.917 * 3.908) + sqrt((3.917 * x1))) + sqrt(3.908)))",
+    "node_count": 14,
+    "val_mse": 122.41996966552418,
+    "val_r2": 0.0263230019512547,
+    "fitness": 0.00805672127293278,
+    "features_used": [
+      "sharpe",
+      "drawdown",
+      "implied_vol",
+      "hist_vol"
+    ]
+  },
+  {
+    "seed": 101,
+    "expression": "(max((x2 - x2), (max(x1, 4.879) * (max(x2, 4.879) / abs(0.9072)))) + (4.879 + log((sqrt(x0) * (-3.966 * -4.305)))))",
+    "node_count": 24,
+    "val_mse": 132.27597441527388,
+    "val_r2": -0.052067518351194275,
+    "fitness": 0.007436272570979187,
+    "features_used": [
+      "sharpe",
+      "drawdown",
+      "implied_vol",
+      "hist_vol"
+    ]
+  },
+  {
+    "seed": 202,
+    "expression": "(abs(((4.973 + x2) * (4.973 + x2))) + (((4.973 - x0) + x3) * (3.906 - 2.616)))",
+    "node_count": 18,
+    "val_mse": 109.15019268973933,
+    "val_r2": 0.13186523207808676,
+    "fitness": 0.009004937098973594,
+    "features_used": [
+      "sharpe",
+      "drawdown",
+      "implied_vol",
+      "hist_vol"
+    ]
+  },
+  {
+    "seed": 303,
+    "expression": "(abs(4.782) + (abs(4.782) + max((abs(4.782) * 4.782), (sqrt(x1) + 4.782))))",
+    "node_count": 15,
+    "val_mse": 139.75061079280198,
+    "val_r2": -0.111517635268084,
+    "fitness": 0.007067107303616454,
+    "features_used": [
+      "sharpe",
+      "drawdown",
+      "implied_vol",
+      "hist_vol"
+    ]
+  },
+  {
+    "seed": 404,
+    "expression": "max(((3.727 + 3.727) + (((0.263 + 3.727) + 3.727) / 0.263)), max(x1, max(x1, x0)))",
+    "node_count": 17,
+    "val_mse": 126.1234384778517,
+    "val_r2": -0.003132832790466722,
+    "fitness": 0.007814121523139893,
+    "features_used": [
+      "sharpe",
+      "drawdown",
+      "implied_vol",
+      "hist_vol"
+    ]
+  }
+]

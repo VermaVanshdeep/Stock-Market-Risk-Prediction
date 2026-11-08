@@ -79,10 +79,24 @@ if TORCH_AVAILABLE:
             self.num_rules = 16
             self.consequent_weights = nn.Parameter(torch.randn(self.num_rules, self.num_inputs + 1) * 0.1)
 
+        def clamp_and_sort_parameters(self) -> None:
+            """
+            Enforces physiological and mathematical constraints on Gaussian MFs:
+            1. Spreads (sigmas) strictly clamped to [0.01, 2.0].
+            2. Centers (means) sorted Low < Medium < High within each feature row.
+            3. Spreads permuted to stay paired with their respective sorted centers.
+            """
+            with torch.no_grad():
+                self.sigmas.clamp_(0.01, 2.0)
+                for i in range(self.num_inputs):
+                    sorted_means, sort_idx = torch.sort(self.means[i])
+                    self.means[i].copy_(sorted_means)
+                    self.sigmas[i].copy_(self.sigmas[i][sort_idx])
+
         def compute_membership(self, x: torch.Tensor) -> torch.Tensor:
             x_exp = x.unsqueeze(-1)
             means_exp = self.means.unsqueeze(0)
-            sigmas_exp = torch.clamp(self.sigmas.unsqueeze(0), min=1e-4)
+            sigmas_exp = torch.clamp(self.sigmas.unsqueeze(0), min=0.01, max=2.0)
 
             diff = (x_exp - means_exp) / sigmas_exp
             mu = torch.exp(-0.5 * (diff ** 2))
@@ -115,8 +129,10 @@ if TORCH_AVAILABLE:
                 firing_strengths.append(w)
 
             w_tensor = torch.stack(firing_strengths, dim=1)
-            w_sum = torch.sum(w_tensor, dim=1, keepdim=True) + 1e-8
-            w_norm = w_tensor / w_sum
+            w_sum = torch.sum(w_tensor, dim=1, keepdim=True)
+            # Robust fallback: if all rules underflow on extreme outliers, assign uniform partition of unity
+            uniform_weights = torch.full_like(w_tensor, 1.0 / self.num_rules)
+            w_norm = torch.where(w_sum > 1e-7, w_tensor / (w_sum + 1e-8), uniform_weights)
 
             x_aug = torch.cat([x, torch.ones(batch_size, 1, device=x.device)], dim=1)
             consequents = torch.matmul(x_aug, self.consequent_weights.T)
@@ -153,13 +169,26 @@ else:
             np.random.seed(42)
             self.consequent_weights = np.random.randn(self.num_rules, self.num_inputs + 1) * 0.1
 
+        def clamp_and_sort_parameters(self) -> None:
+            """
+            Enforce parameter constraints:
+            1. Spreads (sigmas) strictly clamped to [0.01, 2.0].
+            2. Centers (means) sorted Low < Medium < High within each feature row.
+            3. Spreads permuted to stay paired with their respective sorted centers.
+            """
+            self.sigmas = np.clip(self.sigmas, 0.01, 2.0)
+            for i in range(self.num_inputs):
+                sort_idx = np.argsort(self.means[i])
+                self.means[i] = self.means[i][sort_idx]
+                self.sigmas[i] = self.sigmas[i][sort_idx]
+
         def compute_membership(self, x: np.ndarray) -> np.ndarray:
             if x.ndim == 1:
                 x = x[np.newaxis, :]
             batch_size = x.shape[0]
             x_exp = x[:, :, np.newaxis]
             means_exp = self.means[np.newaxis, :, :]
-            sigmas_exp = np.clip(self.sigmas[np.newaxis, :, :], 1e-4, None)
+            sigmas_exp = np.clip(self.sigmas[np.newaxis, :, :], 0.01, 2.0)
 
             diff = (x_exp - means_exp) / sigmas_exp
             mu = np.exp(-0.5 * (diff ** 2))
@@ -191,8 +220,9 @@ else:
                 firing_strengths.append(w)
 
             w_tensor = np.column_stack(firing_strengths)
-            w_sum = np.sum(w_tensor, axis=1, keepdims=True) + 1e-8
-            w_norm = w_tensor / w_sum
+            w_sum = np.sum(w_tensor, axis=1, keepdims=True)
+            uniform_weights = np.full_like(w_tensor, 1.0 / self.num_rules)
+            w_norm = np.where(w_sum > 1e-7, w_tensor / (w_sum + 1e-8), uniform_weights)
 
             x_aug = np.column_stack([x, np.ones((batch_size, 1))])
             consequents = np.dot(x_aug, self.consequent_weights.T)

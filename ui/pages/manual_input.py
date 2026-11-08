@@ -172,8 +172,8 @@ def render() -> None:
             unsafe_allow_html=True,
         )
         callout(
-            f"Forecast next-horizon maximum drawdown: "
-            f"<b>{float(result['predicted_mdd']) * 100:.2f}%</b> · "
+            f"Forecast next-horizon (10-day) maximum drawdown: "
+            f"<b>{float(result['predicted_mdd']) * 100:.2f}%</b> (model projection over 10 trading days) · "
             f"headline category derived from the fusion network's classification head."
         )
         subtle_note(model_status_note())

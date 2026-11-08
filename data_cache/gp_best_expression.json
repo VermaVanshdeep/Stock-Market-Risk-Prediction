@@ -1,0 +1,51 @@
+{
+  "expression": "(abs((4.235 * x0)) * (4.235 / sqrt(3.224)))",
+  "fitness": 0.001445438151864326,
+  "val_mse": 690.3817457652547,
+  "val_r2": -3.1261017390343557,
+  "node_count": 9,
+  "fitness_history": [
+    0.0009561735336134914,
+    0.001185470791354262,
+    0.001445438151864326
+  ],
+  "avg_fitness_history": [
+    0.0006738740740626196,
+    0.0009574248233476807,
+    0.0010809344910430987
+  ],
+  "complexity_history": [
+    10,
+    10,
+    9
+  ],
+  "seed": 0,
+  "metadata": {
+    "train_samples": 1836,
+    "val_samples": 324,
+    "test_samples": 240,
+    "total_samples": 2400,
+    "config": {
+      "population_size": 8,
+      "generations": 3,
+      "max_depth": 3,
+      "max_nodes": 15,
+      "tournament_k": 3,
+      "crossover_rate": 0.85,
+      "mutation_rate": 0.1,
+      "elite_count": 1,
+      "complexity_alpha": 0.05,
+      "const_low": -5.0,
+      "const_high": 5.0,
+      "init_depth_min": 2,
+      "init_depth_max": 5
+    },
+    "feature_names": [
+      "sharpe",
+      "drawdown",
+      "implied_vol",
+      "hist_vol"
+    ],
+    "fitness_definition": "1 / (1 + blended_MSE + alpha*nodes); blended_MSE = 0.70*MSE_train + 0.30*MSE_val; model selection by pure val fitness"
+  }
+}

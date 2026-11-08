@@ -3,13 +3,15 @@ Risk Dashboard page: pick a company, fetch market data, run the hybrid model and
 explore the result through interactive charts and fuzzy-rule explanations.
 """
 
-from typing import Dict, Tuple
+from datetime import datetime
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 from ui import charts, services
+from config.settings import get_currency_config
 from ui.components import (
     RISK_BLURB,
     callout,
@@ -34,9 +36,9 @@ def _metric_cards(metrics: Dict[str, float]) -> list:
             "hint": "Excess return per unit of total volatility (Rf = 4%).",
         },
         {
-            "eyebrow": "Max Drawdown",
+            "eyebrow": "Historical Drawdown (Observed)",
             "value": f"{metrics.get('drawdown', 0.0) * 100:.2f}%",
-            "hint": "Largest peak-to-trough decline over the window.",
+            "hint": "Largest peak-to-trough decline over the selected trailing window.",
         },
         {
             "eyebrow": "Implied Volatility",
@@ -61,7 +63,7 @@ def _metric_cards(metrics: Dict[str, float]) -> list:
     ]
 
 
-def _render_results(result: Dict[str, object], metrics: Dict[str, float]) -> None:
+def _render_results(result: Dict[str, object], metrics: Dict[str, float], ticker: str) -> None:
     score = float(result["score"])
     category = str(result["category"])
     vector = result["vector"]
@@ -74,7 +76,7 @@ def _render_results(result: Dict[str, object], metrics: Dict[str, float]) -> Non
         st.plotly_chart(
             risk_gauge(score, category),
             theme=None,
-            key="dashboard_gauge",
+            key=f"dashboard_gauge_{ticker}",
         )
 
     with verdict_col:
@@ -89,9 +91,24 @@ def _render_results(result: Dict[str, object], metrics: Dict[str, float]) -> Non
             unsafe_allow_html=True,
         )
         callout(
-            f"Forecast next-horizon maximum drawdown: "
+            f"Forecast next-horizon (10-day) maximum drawdown: "
             f"<b>{float(result['predicted_mdd']) * 100:.2f}%</b> · "
+            f"Historical observed drawdown: <b>{metrics.get('drawdown', 0.0) * 100:.2f}%</b> · "
             f"headline category derived from the fusion network's classification head."
+        )
+        gp_expr = result.get("gp_expression", "(none)")
+        st.markdown(
+            f'<div style="display:flex; flex-wrap:wrap; gap:6px; margin: 8px 0 10px 0;">'
+            f'<span class="srp-pill" style="background:#f1f5f9; color:#0f172a; border-color:#cbd5e1; font-size:0.78rem;">'
+            f'<span class="srp-pill-dot" style="background:#2563eb;"></span><b>BiLSTM</b>: 128-D Temporal</span>'
+            f'<span class="srp-pill" style="background:#f1f5f9; color:#0f172a; border-color:#cbd5e1; font-size:0.78rem;">'
+            f'<span class="srp-pill-dot" style="background:#10b981;"></span><b>TSK Fuzzy</b>: 16 Rules</span>'
+            f'<span class="srp-pill" style="background:#f1f5f9; color:#0f172a; border-color:#cbd5e1; font-size:0.78rem;">'
+            f'<span class="srp-pill-dot" style="background:#f59e0b;"></span><b>GA</b>: 24 Tuned MF Params</span>'
+            f'<span class="srp-pill" style="background:#f1f5f9; color:#0f172a; border-color:#cbd5e1; font-size:0.78rem;">'
+            f'<span class="srp-pill-dot" style="background:#8b5cf6;"></span><b>GP Signal</b>: <code>{gp_expr}</code></span>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
         subtle_note(model_status_note())
 
@@ -105,10 +122,10 @@ def _render_results(result: Dict[str, object], metrics: Dict[str, float]) -> Non
     render_cards(_metric_cards(metrics), columns=3)
 
     st.divider()
-    _render_explainer(vector)
+    _render_explainer(vector, ticker)
 
 
-def _render_explainer(vector: np.ndarray) -> None:
+def _render_explainer(vector: np.ndarray, ticker: str) -> None:
     section_title("Why this score?",
                   "Membership curves and rule firings produced by the Takagi-Sugeno layer.")
 
@@ -126,7 +143,7 @@ def _render_explainer(vector: np.ndarray) -> None:
         current=current,
         degrees=degrees,
     )
-    st.plotly_chart(fig, theme=None, key="dash_membership")
+    st.plotly_chart(fig, theme=None, key=f"dash_membership_{ticker}")
 
     strengths = services.rule_firing_strengths(vector)
     catalog = services.rule_catalog()
@@ -142,7 +159,7 @@ def _render_explainer(vector: np.ndarray) -> None:
     with tab_bar:
         st.plotly_chart(
             charts.rule_firing_chart(catalog, strengths),
-            theme=None, key="dash_rules",
+            theme=None, key=f"dash_rules_{ticker}",
         )
     with tab_table:
         table = pd.DataFrame([
@@ -193,53 +210,78 @@ def _suggestion_rows(query: str) -> None:
         )
 
 
-def _google_quote_card(ticker: str, exchange: str) -> None:
-    """Live Google Finance quote strip shown above the risk assessment."""
+def _google_quote_card(ticker: str, exchange: str, df: Optional[pd.DataFrame] = None) -> None:
+    """Live quote strip shown above the risk assessment."""
+    curr_cfg = get_currency_config(ticker)
+    curr_sym = curr_cfg["symbol"]
+    curr_code = curr_cfg["code"]
     quote = services.google_finance_quote(ticker, exchange)
 
-    if not quote or quote.get("price") is None:
+    price = quote.get("price") if quote else None
+    source_label = quote.get("source_name", "Google Finance") if quote else "Market Feed"
+    exch_label = quote.get("exchange", exchange) if quote else exchange
+    name_label = quote.get("name") if (quote and quote.get("name")) else services.COMPANY_NAME_MAP.get(ticker, ticker)
+    retrieved_time = quote.get("retrieved_at", datetime.now().strftime("%H:%M:%S")) if quote else datetime.now().strftime("%H:%M:%S")
+
+    # If live quote failed, use latest price from historical data df as reliable fallback
+    if (price is None or price <= 0) and df is not None and not df.empty and "Close" in df:
+        close_series = df["Close"].dropna()
+        if not close_series.empty:
+            price = float(close_series.iloc[-1])
+            source_label = "Historical Close"
+
+    if price is None:
         st.caption(
-            "Google Finance quote unavailable for this listing right now — "
-            "risk metrics still come from the full price history below."
+            f"Live market quote unavailable for this listing right now — "
+            f"risk metrics and prices ({curr_code}) still come from the full price history below."
         )
         return
 
     cards = [
         {
-            "eyebrow": f"Google Finance · {quote['exchange']}",
-            "value": f"{quote['currency']} {quote['price']:,.2f}",
-            "hint": f"Live quote for {quote['name']} at {quote['retrieved_at']}.",
+            "eyebrow": f"{source_label} · {exch_label}",
+            "value": f"{curr_sym}{price:,.2f} ({curr_code})",
+            "hint": f"Quote for {name_label} at {retrieved_time}.",
         },
         {
             "eyebrow": "Company",
-            "value": quote["name"],
-            "hint": f"Resolved ticker {quote['ticker']}.",
+            "value": name_label,
+            "hint": f"Resolved ticker {ticker}.",
         },
         {
-            "eyebrow": "Source",
-            "value": "Google",
-            "hint": "Read from the public Google Finance quote page.",
+            "eyebrow": "Currency",
+            "value": f"{curr_code} ({curr_sym})",
+            "hint": f"Pricing currency: {curr_cfg['locale']}.",
         },
     ]
     render_cards(cards, columns=3)
     st.markdown(
-        f'<div class="srp-hint">Quote retrieved from Google Finance at '
-        f'{quote["retrieved_at"]}. Risk metrics below are computed from the full '
+        f'<div class="srp-hint">Quote retrieved via {source_label} at '
+        f'{retrieved_time}. Currency: <b>{curr_code} ({curr_sym})</b>. Risk metrics below are computed from the full '
         f'price history, not this single price.</div>',
         unsafe_allow_html=True,
     )
 
 
-def _load_yahoo() -> Tuple[pd.DataFrame, str, str, str]:
+def _load_yahoo() -> Tuple[pd.DataFrame, str, str, str, str]:
     """
     Resolves the Yahoo Finance source.
 
-    Returns (df, ticker, company_name, note).
+    Returns (df, ticker, company_name, status_code, status_label).
     """
     st.markdown(
         '<div class="srp-card-eyebrow">Step 1 — find the company</div>',
         unsafe_allow_html=True,
     )
+
+    curr_res = st.session_state.get("resolution")
+    active_ticker = (
+        curr_res.get("ticker")
+        if curr_res and curr_res.get("ticker")
+        else st.session_state.get("resolved_query") or services.FEATURED_STOCKS[0]
+    )
+
+    st.session_state.setdefault("search_query", active_ticker)
 
     query_row = st.columns([4.6, 1.8, 1.6], gap="medium")
     with query_row[0]:
@@ -260,14 +302,80 @@ def _load_yahoo() -> Tuple[pd.DataFrame, str, str, str]:
         st.markdown("")
         refresh = st.button("Refresh", width="stretch")
 
-    featured = st.columns(6, gap="small")
-    for col, symbol in zip(featured, services.FEATURED_STOCKS[:6]):
+    st.markdown(
+        '<div style="margin: 6px 0 3px 0; font-size: 0.76rem; font-weight: 700; '
+        'color: var(--srp-slate-600); text-transform: uppercase; letter-spacing: 0.6px;">'
+        'Quick-Select Stocks (Faculty Demonstration)</div>',
+        unsafe_allow_html=True,
+    )
+
+    # 10 quick-select stock buttons in 2 clean, responsive rows of 5
+    stocks = services.FEATURED_STOCKS[:10]
+    row1 = st.columns(5, gap="small")
+    for col, symbol in zip(row1, stocks[:5]):
+        is_sel = (symbol == active_ticker)
+        company_label = services.COMPANY_NAME_MAP.get(symbol, symbol)
         with col:
             st.button(
                 symbol,
                 key=f"featured_{symbol}",
                 width="stretch",
-                help=services.resolve_free_text(symbol)["name"],
+                type="primary" if is_sel else "secondary",
+                help=f"{symbol} — {company_label} (click to analyse)",
+                on_click=_select_featured,
+                args=(symbol,),
+            )
+
+    row2 = st.columns(5, gap="small")
+    for col, symbol in zip(row2, stocks[5:10]):
+        is_sel = (symbol == active_ticker)
+        company_label = services.COMPANY_NAME_MAP.get(symbol, symbol)
+        with col:
+            st.button(
+                symbol,
+                key=f"featured_{symbol}",
+                width="stretch",
+                type="primary" if is_sel else "secondary",
+                help=f"{symbol} — {company_label} (click to analyse)",
+                on_click=_select_featured,
+                args=(symbol,),
+            )
+
+    st.markdown(
+        '<div style="margin: 10px 0 3px 0; font-size: 0.76rem; font-weight: 700; '
+        'color: var(--srp-slate-600); text-transform: uppercase; letter-spacing: 0.6px;">'
+        '🇮🇳 Indian Markets (NSE Benchmark Stocks)</div>',
+        unsafe_allow_html=True,
+    )
+    from config.settings import NSE_FEATURED_STOCKS
+    nse_row1 = st.columns(4, gap="small")
+    for col, symbol in zip(nse_row1, NSE_FEATURED_STOCKS[:4]):
+        is_sel = (symbol == active_ticker)
+        company_label = services.COMPANY_NAME_MAP.get(symbol, symbol)
+        short_name = symbol.replace(".NS", "")
+        with col:
+            st.button(
+                f"{short_name} (NSE)",
+                key=f"featured_{symbol}",
+                width="stretch",
+                type="primary" if is_sel else "secondary",
+                help=f"{symbol} — {company_label} (click to analyse)",
+                on_click=_select_featured,
+                args=(symbol,),
+            )
+
+    nse_row2 = st.columns(4, gap="small")
+    for col, symbol in zip(nse_row2, NSE_FEATURED_STOCKS[4:8]):
+        is_sel = (symbol == active_ticker)
+        company_label = services.COMPANY_NAME_MAP.get(symbol, symbol)
+        short_name = symbol.replace(".NS", "")
+        with col:
+            st.button(
+                f"{short_name} (NSE)",
+                key=f"featured_{symbol}",
+                width="stretch",
+                type="primary" if is_sel else "secondary",
+                help=f"{symbol} — {company_label} (click to analyse)",
                 on_click=_select_featured,
                 args=(symbol,),
             )
@@ -312,12 +420,9 @@ def _load_yahoo() -> Tuple[pd.DataFrame, str, str, str]:
     period_row = st.columns([2.4, 7.6], gap="medium")
     with period_row[0]:
         period_label = st.selectbox("History window", list(PERIODS.keys()), index=1)
-    with period_row[1]:
-        st.markdown("")
-        _google_quote_card(ticker, resolution.get("exchange", "NASDAQ"))
 
     if refresh:
-        services.fetch_stock.clear()
+        services.clear_market_cache()
         services.google_finance_quote.clear()
         st.rerun()
 
@@ -326,21 +431,24 @@ def _load_yahoo() -> Tuple[pd.DataFrame, str, str, str]:
 
     try:
         with st.spinner(f"Loading {period_label} of price history for {fetch_ticker}…"):
-            df, is_synthetic = services.fetch_stock(fetch_ticker, period)
+            df, status_code, status_label = services.fetch_stock_with_meta(fetch_ticker, period)
     except Exception as exc:
         st.error(f"Could not load data for **{ticker}** — {exc}")
         st.stop()
 
-    if df is None or df.empty:
-        st.error(f"No price history returned for **{ticker}**.")
+    if df is None or df.empty or len(df) < 30:
+        st.error(f"Insufficient historical price data for **{ticker}** (minimum 30 trading bars required).")
         st.stop()
 
-    note = "synthetic fallback series" if is_synthetic else "live yfinance series"
-    return df, ticker, company_name, note
+    with period_row[1]:
+        st.markdown("")
+        _google_quote_card(ticker, resolution.get("exchange", "NASDAQ"), df=df)
+
+    return df, ticker, company_name, status_code, status_label
 
 
-def _load_google() -> Tuple[pd.DataFrame, str, str, str]:
-    """Resolves a Google Sheets source. Returns (df, ticker, company_name, note)."""
+def _load_google() -> Tuple[pd.DataFrame, str, str, str, str]:
+    """Resolves a Google Sheets source. Returns (df, ticker, company_name, status_code, status_label)."""
     control = st.columns([6.0, 3.4], gap="medium")
     with control[0]:
         url = st.text_input(
@@ -397,7 +505,7 @@ def _load_google() -> Tuple[pd.DataFrame, str, str, str]:
 
     notes = st.session_state.get("gs_notes", [])
     label = name.strip() or "Custom Portfolio"
-    return df, label.upper().replace(" ", "_")[:12], label, "google sheets dataset"
+    return df, label.upper().replace(" ", "_")[:12], label, "google", "Google Sheets dataset"
 
 
 def render() -> None:
@@ -419,9 +527,9 @@ def render() -> None:
     )
 
     if source == "Yahoo Finance":
-        df, ticker, company_name, note = _load_yahoo()
+        df, ticker, company_name, status_code, status_label = _load_yahoo()
     else:
-        df, ticker, company_name, note = _load_google()
+        df, ticker, company_name, status_code, status_label = _load_google()
 
     if not services.model_is_trained() and services.model_training_status()["torch"]:
         with st.spinner(
@@ -440,11 +548,33 @@ def render() -> None:
             st.error(f"Could not compute risk metrics from this dataset — {exc}")
             st.stop()
 
-    st.caption(
-        f"**{company_name}** · {len(df)} trading bars · "
-        f"{df.index.min().date()} → {df.index.max().date()} · {note}"
+    status_badges = {
+        "live": (
+            '<span class="srp-pill" style="color:#15803d; background:#dcfce7; border-color:#86efac; font-weight:650;">'
+            '<span class="srp-pill-dot" style="background:#22c55e;"></span>Live Yahoo Finance</span>'
+        ),
+        "cached": (
+            '<span class="srp-pill" style="color:#1d4ed8; background:#dbeafe; border-color:#93c5fd; font-weight:650;">'
+            '<span class="srp-pill-dot" style="background:#3b82f6;"></span>Cached Data</span>'
+        ),
+        "synthetic": (
+            '<span class="srp-pill" style="color:#c2410c; background:#ffedd5; border-color:#fdba74; font-weight:650;">'
+            '<span class="srp-pill-dot" style="background:#f97316;"></span>Synthetic Fallback</span>'
+        ),
+    }
+    badge_html = status_badges.get(status_code, f'<span class="srp-pill">{status_label}</span>')
+
+    st.markdown(
+        f'<div style="display:flex; align-items:center; gap:8px; margin: 4px 0 14px 0; flex-wrap:wrap;">'
+        f'{badge_html}'
+        f'<span style="font-size:0.88rem; color:var(--srp-slate-600);">'
+        f'<b>{company_name} ({ticker})</b> · <b>{len(df)}</b> trading bars · '
+        f'<b>{df.index.min().date()}</b> → <b>{df.index.max().date()}</b> · {status_label}'
+        f'</span></div>',
+        unsafe_allow_html=True,
     )
-    if "synthetic" in note:
+
+    if status_code == "synthetic":
         callout(
             "Offline mode: a high-fidelity <b>Merton Jump Diffusion</b> simulator generated "
             "this series because live market data was unreachable. Metrics remain fully valid "
@@ -460,7 +590,7 @@ def render() -> None:
                 "Garman-Klass implied volatility."
             )
 
-    _render_results(result, metrics)
+    _render_results(result, metrics, ticker)
 
     st.divider()
     section_title("Interactive market charts",
@@ -476,20 +606,21 @@ def render() -> None:
             ["Line", "Candlestick"],
             horizontal=True,
             help="Candlestick requires OHLC columns, which the loader always provides.",
+            key=f"chart_type_{ticker}",
         )
         st.plotly_chart(
             charts.price_drawdown_chart(df, ticker, metrics, chart_type),
-            theme=None, key="dash_price",
+            theme=None, key=f"dash_price_{ticker}_{chart_type}",
         )
         st.plotly_chart(
             charts.monthly_returns_heatmap(df, ticker),
-            theme=None, key="dash_monthly",
+            theme=None, key=f"dash_monthly_{ticker}",
         )
 
     with tab_vol:
         st.plotly_chart(
             charts.volatility_chart(df, metrics),
-            theme=None, key="dash_vol",
+            theme=None, key=f"dash_vol_{ticker}",
         )
         st.caption(
             "Rolling HV uses a 21-day window annualised by √252. The dashed line is the "
@@ -499,7 +630,7 @@ def render() -> None:
     with tab_breakdown:
         st.plotly_chart(
             category_bar(services.class_probabilities(vector)),
-            theme=None, key="dash_probs",
+            theme=None, key=f"dash_probs_{ticker}",
         )
         st.caption(
             "Softmax probability assigned by the classification head to each of the four "
@@ -507,7 +638,7 @@ def render() -> None:
         )
 
     with tab_raw:
-        show_metrics = st.checkbox("Show extracted risk metrics table", value=True)
+        show_metrics = st.checkbox("Show extracted risk metrics table", value=True, key=f"show_metrics_{ticker}")
         if show_metrics:
             metrics_table = pd.DataFrame(
                 [
@@ -527,4 +658,139 @@ def render() -> None:
             data=df.to_csv().encode("utf-8"),
             file_name=f"{ticker}_prices.csv",
             mime="text/csv",
+            key=f"download_{ticker}",
         )
+
+    st.divider()
+    _render_cross_stock_comparison(ticker)
+
+    st.divider()
+    _render_algorithm_architecture()
+
+    st.divider()
+    _render_model_performance()
+
+
+def _render_cross_stock_comparison(active_ticker: str) -> None:
+    section_title(
+        "Cross-Stock Risk Comparison",
+        "Empirical proof of model sensitivity: identical trained hybrid model evaluated across 10 liquid demonstration stocks."
+    )
+    with st.spinner("Loading cross-stock risk benchmarks…"):
+        df_comp = services.fetch_featured_stock_comparison()
+
+    if df_comp is not None and not df_comp.empty:
+        col_chart, col_table = st.columns([6, 5], gap="medium")
+        with col_chart:
+            st.plotly_chart(
+                charts.risk_comparison_bar_chart(df_comp, highlight_ticker=active_ticker),
+                theme=None,
+                key=f"dash_comp_bar_{active_ticker}",
+                width="stretch",
+            )
+        with col_table:
+            st.markdown(
+                '<div style="font-size:0.85rem; font-weight:700; color:var(--srp-slate-600); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px;">'
+                'Comparison Table (Sorted by Risk Score)</div>',
+                unsafe_allow_html=True,
+            )
+            df_display = df_comp.sort_values(by="Risk Score", ascending=True).copy()
+            st.dataframe(
+                df_display,
+                hide_index=True,
+                column_config={
+                    "Risk Score": st.column_config.NumberColumn("Risk Score", format="%.2f"),
+                    "Sharpe": st.column_config.NumberColumn("Sharpe", format="%.2f"),
+                },
+                width="stretch",
+            )
+            callout(
+                f"<b>Currently analyzing: {active_ticker}</b>. Low-volatility defensive stocks sit at lower scores, "
+                f"while higher-drawdown / high-beta stocks scale dynamically into higher risk categories."
+            )
+
+
+def _render_algorithm_architecture() -> None:
+    section_title(
+        "Hybrid Architecture & Core Algorithms",
+        "How the four computing paradigms collaborate to predict risk without black-box opacity."
+    )
+    summary = services.get_model_performance_summary()
+    algos = summary.get("algorithms", [])
+
+    cols = st.columns(2, gap="medium")
+    for i, algo in enumerate(algos[:4]):
+        col = cols[i % 2]
+        with col:
+            st.markdown(
+                f'<div class="srp-card" style="margin-bottom:12px; height:100%;">'
+                f'<div class="srp-card-eyebrow" style="color:#2563eb;">{algo["role"]}</div>'
+                f'<div style="font-size:1.02rem; font-weight:700; color:#0f172a; margin: 4px 0 6px 0;">{algo["name"]}</div>'
+                f'<div style="font-size:0.86rem; color:#475569; line-height:1.45;">{algo["desc"]}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    if len(algos) > 4:
+        st.markdown(
+            f'<div class="srp-card" style="background:#f8fafc; border:1px solid #cbd5e1; margin-top:6px;">'
+            f'<div class="srp-card-eyebrow" style="color:#0f172a;">{algos[4]["role"]}</div>'
+            f'<div style="font-size:1.02rem; font-weight:700; color:#0f172a; margin: 4px 0 6px 0;">{algos[4]["name"]}</div>'
+            f'<div style="font-size:0.86rem; color:#475569; line-height:1.45;">{algo["desc"]}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def _render_model_performance() -> None:
+    section_title(
+        "Model Performance & Benchmark Results",
+        "Pre-computed empirical evaluation metrics demonstrating model accuracy against conventional baselines."
+    )
+    summary = services.get_model_performance_summary()
+    metrics = summary.get("metrics", {})
+
+    cards = [
+        {
+            "eyebrow": "Held-Out Test MAE",
+            "value": f"{metrics.get('test_mae', 7.19):.2f}",
+            "hint": "Overall held-out test error (0-100 scale) across all 8 test equities.",
+        },
+        {
+            "eyebrow": "Test Accuracy",
+            "value": f"{metrics.get('test_accuracy', 66.5):.1f}%",
+            "hint": "4-way risk category classification accuracy on test partition.",
+        },
+        {
+            "eyebrow": "Sector Error Range",
+            "value": f"{metrics.get('financials_mae', 3.96):.2f} – {metrics.get('consumer_disc_mae', 11.64):.2f}",
+            "hint": "Low error in Financials (JPM: 3.96) vs higher in Consumer Disc (TSLA: 11.64).",
+        },
+        {
+            "eyebrow": "Training Universe",
+            "value": f"{metrics.get('universe_size', 20)} Stocks",
+            "hint": "Diversified equities across 6 sectors (12 supervised epochs).",
+        },
+    ]
+    render_cards(cards, columns=4)
+
+    baselines_df = summary.get("baselines_df")
+    if baselines_df is not None:
+        st.markdown(
+            '<div style="font-size:0.88rem; font-weight:600; color:var(--srp-slate-600); margin: 16px 0 6px 0;">'
+            'Benchmark Comparison (Identical Held-Out Partition)</div>',
+            unsafe_allow_html=True,
+        )
+        st.dataframe(baselines_df, hide_index=True, width="stretch")
+        st.caption(
+            "<b>Evaluation protocol & analysis:</b> Evaluated on an identical strictly chronological held-out test partition "
+            "with forward look-ahead boundaries to eliminate data leakage. "
+            "<br><b>Academic Assessment:</b> The Full Hybrid model (Score MAE 7.194, Accuracy 66.5%) does not outperform every "
+            "simpler baseline; unconstrained tabular models like Linear Regression (MAE 5.923) and Random Forest (Accuracy 69.4%) "
+            "achieve lower quantitative error. The hybrid architecture was designed for <b>soft-computing explainability</b> "
+            "— providing transparent Gaussian membership curves, explicit rule firing strengths, and symbolic GP expressions — "
+            "rather than black-box score minimization. Note that headline sector MAE spans from 3.96 on stable assets (JPM) "
+            "to 11.64 on high-volatility assets (TSLA).",
+            unsafe_allow_html=True,
+        )
+

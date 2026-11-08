@@ -1,6 +1,7 @@
 """
-Genetic Algorithm optimizer page: evolve fuzzy membership parameters and feature
-weights with a live progress bar and convergence diagnostics.
+Genetic Algorithm optimizer page: evolve fuzzy membership-function parameters
+(24 genes: 12 Gaussian centres + 12 Gaussian spreads) with a live progress bar
+and convergence diagnostics.
 """
 
 import numpy as np
@@ -33,9 +34,10 @@ def render() -> None:
     page_header(
         "Evolutionary optimisation",
         "Genetic Algorithm Optimizer",
-        "Evolve the 28-gene chromosome — 12 membership centres, 12 spreads and 4 feature "
-        "importance weights — using tournament selection, simulated binary crossover and "
-        "Gaussian mutation.",
+        "Evolve the 24-gene chromosome — 12 Gaussian membership centres (genes 0–11) and "
+        "12 Gaussian membership spreads (genes 12–23) — using tournament selection, "
+        "single-point crossover and domain-proportional Gaussian mutation. "
+        "Neural-network weights and fuzzy consequent weights are kept fixed throughout.",
     )
 
     # ------------------------------------------------------------------ #
@@ -61,8 +63,8 @@ def render() -> None:
     total_evals = pop_size * generations
     st.caption(
         f"Approximately **{total_evals:,}** chromosome evaluations · "
-        f"fitness = 1 / (1 + MSE) where MSE compares the weighted risk proxy against "
-        f"the benchmark labels."
+        f"fitness = 1 / (1 + MSE) on the validation split · "
+        f"test rows are never exposed to the GA."
     )
 
     if run:
@@ -97,13 +99,15 @@ def render() -> None:
         )
         return
 
-    history = result["history"]
+    history    = result["history"]
     chromosome = np.asarray(result["chromosome"], dtype=float)
-    weights = chromosome[24:28]
+    metadata   = result.get("metadata", {})
 
-    best = history[-1] if history else 0.0
-    first = history[0] if history else 0.0
+    best        = history[-1] if history else 0.0
+    first       = history[0]  if history else 0.0
     improvement = (best - first) if first > 0 else best
+    baseline    = float(metadata.get("baseline_fitness", 0.0))
+    improved    = bool(metadata.get("improved", False))
 
     st.divider()
     section_title(
@@ -117,12 +121,22 @@ def render() -> None:
             {
                 "eyebrow": "Best fitness",
                 "value": f"{best:.6f}",
-                "hint": "1 / (1 + MSE) of the best chromosome found.",
+                "hint": "1 / (1 + MSE) on validation — higher is better.",
+            },
+            {
+                "eyebrow": "Baseline fitness",
+                "value": f"{baseline:.6f}",
+                "hint": "Full-model fitness before evolution started.",
             },
             {
                 "eyebrow": "Fitness gain",
                 "value": f"+{improvement:.6f}",
-                "hint": "Improvement over the best individual of generation 1.",
+                "hint": "Improvement over generation-1 best individual.",
+            },
+            {
+                "eyebrow": "Applied to model",
+                "value": "Yes" if improved else "No (rolled back)",
+                "hint": "Chromosome applied only when it beats the baseline.",
             },
             {
                 "eyebrow": "Evaluations",
@@ -133,16 +147,27 @@ def render() -> None:
         columns=3,
     )
 
+    # Spread of the 12 optimised MF spreads (genes 12-23) used as summary chart
+    spreads_flat = chromosome[12:24]
     left, right = st.columns([1.15, 1], gap="large")
     with left:
         st.plotly_chart(charts.fitness_chart(history), theme=None, key="ga_fitness")
     with right:
-        st.plotly_chart(charts.feature_weights_chart(weights), theme=None, key="ga_weights")
+        st.plotly_chart(
+            charts.feature_weights_chart(spreads_flat[:4]),
+            theme=None,
+            key="ga_spreads",
+        )
+        st.caption(
+            "Chart shows the Low-term spread (σ) for each of the four input features "
+            "after evolution. All 12 MF spreads are in the Membership parameters tab."
+        )
 
     callout(
         "<b>Interpretation.</b> The fitness curve flattening means the population has "
-        "converged — further generations buy little. The weights chart shows how much "
-        "influence the optimizer assigned to each of the four antecedent metrics."
+        "converged — further generations buy little. "
+        "If <i>Applied to model</i> is <b>No</b>, the evolved parameters did not "
+        "outperform the gradient-descent baseline, so the original values were restored."
     )
 
     tab_params, tab_vector = st.tabs(["Membership parameters", "Raw chromosome"])
@@ -160,7 +185,8 @@ def render() -> None:
             hide_index=True,
         )
         st.caption(
-            "Genes 0–11: centres · genes 12–23: spreads · genes 24–27: feature weights."
+            "Genes 0–11: Gaussian MF centres (μ) · genes 12–23: Gaussian MF spreads (σ). "
+            "Total: 24 genes."
         )
 
     st.divider()

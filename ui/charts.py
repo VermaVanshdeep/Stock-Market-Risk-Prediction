@@ -3,12 +3,14 @@ Interactive Plotly chart builders for the Streamlit UI.
 Restricted styling palette: Standard Default and Blue accents only.
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+from config.settings import get_currency_config
 
 NAVY = "#0f172a"
 BLUE = "#1d4ed8"
@@ -72,12 +74,15 @@ def _style(
 def price_drawdown_chart(df: pd.DataFrame, ticker: str, metrics: Dict[str, float],
                          chart_type: str = "Line") -> go.Figure:
     """Two-row linked figure: price history on top, drawdown profile below."""
+    curr_cfg = get_currency_config(ticker)
+    curr_sym = curr_cfg["symbol"]
+
     prices = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
     dates = df.index
 
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.06,
-        subplot_titles=(f"{ticker} — Closing Price", "Drawdown from Running Peak"),
+        subplot_titles=(f"{ticker} — Closing Price ({curr_sym})", "Drawdown from Running Peak"),
         row_heights=[0.6, 0.4],
     )
 
@@ -88,6 +93,13 @@ def price_drawdown_chart(df: pd.DataFrame, ticker: str, metrics: Dict[str, float
                 low=df["Low"], close=df["Close"],
                 name=ticker, increasing_line_color=BLUE_600,
                 decreasing_line_color=BLUE_400, showlegend=False,
+                hovertemplate=(
+                    f"<b>{ticker}</b><br>"
+                    f"Open: {curr_sym}%{{open:,.2f}}<br>"
+                    f"High: {curr_sym}%{{high:,.2f}}<br>"
+                    f"Low: {curr_sym}%{{low:,.2f}}<br>"
+                    f"Close: {curr_sym}%{{close:,.2f}}<extra></extra>"
+                ),
             ),
             row=1, col=1,
         )
@@ -97,7 +109,7 @@ def price_drawdown_chart(df: pd.DataFrame, ticker: str, metrics: Dict[str, float
                 x=dates, y=prices, mode="lines", name="Close",
                 line=dict(color=BLUE, width=2),
                 fill="tozeroy", fillcolor="rgba(59,130,246,0.10)",
-                hovertemplate="%{y:$,.2f}<extra></extra>",
+                hovertemplate=f"<b>Close</b>: {curr_sym}%{{y:,.2f}}<extra></extra>",
             ),
             row=1, col=1,
         )
@@ -122,6 +134,21 @@ def price_drawdown_chart(df: pd.DataFrame, ticker: str, metrics: Dict[str, float
         annotation_font=dict(size=11, color=BLUE_600),
     )
 
+    # Price annotation on latest bar
+    if len(prices) > 0:
+        latest_p = float(prices.iloc[-1])
+        fig.add_annotation(
+            x=dates[-1], y=latest_p,
+            text=f"Last: {curr_sym}{latest_p:,.2f}",
+            showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.2, arrowcolor=BLUE_500,
+            ax=45, ay=0,
+            row=1, col=1,
+            font=dict(size=10, color=NAVY),
+            bgcolor="rgba(255, 255, 255, 0.90)",
+            bordercolor=BLUE_300,
+            borderwidth=1,
+        )
+
     fig.update_layout(
         height=540, margin=dict(l=10, r=18, t=64, b=24),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -132,7 +159,8 @@ def price_drawdown_chart(df: pd.DataFrame, ticker: str, metrics: Dict[str, float
         xaxis2=dict(rangeslider=dict(visible=True, thickness=0.05), type="date"),
     )
     fig.update_xaxes(showgrid=True, gridcolor=GRID, linewidth=1)
-    fig.update_yaxes(showgrid=True, gridcolor=GRID, linewidth=1, ticksuffix="")
+    fig.update_yaxes(showgrid=True, gridcolor=GRID, linewidth=1, tickprefix=curr_sym, row=1, col=1)
+    fig.update_yaxes(showgrid=True, gridcolor=GRID, linewidth=1, tickprefix="", ticksuffix="%", row=2, col=1)
     return fig
 
 
@@ -310,27 +338,47 @@ def membership_chart(
 def rule_firing_chart(catalog: List[Dict[str, str]], strengths: np.ndarray) -> go.Figure:
     """Horizontal bar chart of normalized TSK rule firing strengths."""
     order = np.argsort(strengths)[::-1]
-    labels, values, colors = [], [], []
+    labels, values, colors, text_labels, hover_labels = [], [], [], [], []
 
-    for i in order:
+    for idx, i in enumerate(order):
         entry = catalog[i]
         labels.append(
             f"R{entry['id']}  ·  Sharpe {entry['sharpe']} · DD {entry['drawdown']} · "
             f"IV {entry['implied_vol']} · HV {entry['hist_vol']}"
         )
-        values.append(float(strengths[i]))
-        colors.append(BLUE_500 if i == order[0] else BLUE_300)
+        val = float(strengths[i])
+        values.append(val)
+        colors.append(BLUE_500 if idx == 0 else (BLUE_400 if val > 0.05 else BLUE_300 if val > 0.005 else "#94a3b8"))
+
+        pct = val * 100.0
+        if pct >= 0.1:
+            txt = f"{pct:.1f}%"
+            h_txt = f"{pct:.2f}%"
+        elif pct > 0:
+            txt = "<0.1%"
+            h_txt = f"{pct:.3f}% (negligible)"
+        else:
+            txt = "0.0%"
+            h_txt = "0.00% (inactive)"
+        text_labels.append(txt)
+        hover_labels.append(h_txt)
 
     fig = go.Figure(
         go.Bar(
-            x=[v * 100.0 for v in values], y=labels, orientation="h",
+            x=[v * 100.0 for v in values],
+            y=labels,
+            orientation="h",
             marker_color=colors,
-            hovertemplate="%{y}<br>Firing: %{x:.2f}%<extra></extra>",
+            text=text_labels,
+            textposition="outside",
+            customdata=hover_labels,
+            hovertemplate="%{y}<br>Contribution: %{customdata}<extra></extra>",
+            cliponaxis=False,
         )
     )
     fig.update_layout(
-        height=470,
-        margin=dict(l=8, r=24, t=58, b=68),
+        height=520,
+        margin=dict(l=8, r=40, t=58, b=68),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family=FONT, size=11, color=NAVY),
         title=dict(text="Rule Firing Strengths (normalized contribution)",
@@ -338,7 +386,7 @@ def rule_firing_chart(catalog: List[Dict[str, str]], strengths: np.ndarray) -> g
                    font=dict(size=15, color=NAVY)),
         xaxis=dict(title=dict(text="Share of final fuzzy output (%)", standoff=14),
                    gridcolor=GRID),
-        yaxis=dict(automargin=True, gridcolor="rgba(0,0,0,0)", tickfont=dict(size=10)),
+        yaxis=dict(automargin=True, gridcolor="rgba(0,0,0,0)", tickfont=dict(size=10), autorange="reversed"),
     )
     return fig
 
@@ -450,5 +498,69 @@ def feature_weights_chart(weights: np.ndarray) -> go.Figure:
         xaxis=dict(gridcolor=GRID, tickmode="array", tickvals=names, ticktext=ticks,
                    tickfont=dict(size=10)),
         yaxis=dict(title=dict(text="Weight", standoff=10), gridcolor=GRID),
+    )
+    return fig
+
+
+def risk_comparison_bar_chart(df: pd.DataFrame, highlight_ticker: str = "") -> go.Figure:
+    """
+    Horizontal bar chart comparing risk scores across stocks with color-coded risk bands.
+    """
+    df_sorted = df.sort_values(by="Risk Score", ascending=True).copy()
+
+    cat_colors = {
+        "Low": "#10b981",       # emerald
+        "Moderate": "#f59e0b",  # amber
+        "High": "#f97316",      # orange
+        "Extreme": "#ef4444",   # red
+    }
+
+    colors = [cat_colors.get(str(cat), "#3b82f6") for cat in df_sorted["Category"]]
+    line_widths = [3 if str(t) == str(highlight_ticker) else 1 for t in df_sorted["Ticker"]]
+    line_colors = ["#0f172a" if str(t) == str(highlight_ticker) else "rgba(0,0,0,0.15)" for t in df_sorted["Ticker"]]
+
+    fig = go.Figure(
+        go.Bar(
+            y=df_sorted["Ticker"],
+            x=df_sorted["Risk Score"],
+            orientation="h",
+            marker=dict(
+                color=colors,
+                line=dict(color=line_colors, width=line_widths),
+            ),
+            text=[f"  {s:.1f} ({c})" for s, c in zip(df_sorted["Risk Score"], df_sorted["Category"])],
+            textposition="outside",
+            hovertemplate="<b>%{y}</b>: %{x:.2f} / 100<extra></extra>",
+        )
+    )
+
+    for threshold, name in [(25, "Low / Moderate (25)"), (50, "Moderate / High (50)"), (75, "High / Extreme (75)")]:
+        fig.add_vline(
+            x=threshold, line_dash="dash", line_color="#94a3b8", line_width=1,
+            annotation_text=name, annotation_position="top right",
+            annotation_font=dict(size=10, color=MUTED),
+        )
+
+    fig.update_layout(
+        height=max(360, len(df_sorted) * 36),
+        margin=dict(l=80, r=80, t=50, b=40),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family=FONT, size=12, color=NAVY),
+        title=dict(
+            text="Cross-Stock Risk Score Comparison (Actual Trained Hybrid Model)",
+            x=0.01, xanchor="left", y=0.98, font=dict(size=15, color=NAVY),
+        ),
+        xaxis=dict(
+            title="Calibrated Risk Score (0 - 100)",
+            range=[0, 105],
+            gridcolor=GRID,
+        ),
+        yaxis=dict(
+            tickmode="array",
+            tickvals=df_sorted["Ticker"],
+            ticktext=[f"<b>{t} ★</b>" if str(t) == str(highlight_ticker) else str(t) for t in df_sorted["Ticker"]],
+            gridcolor="rgba(0,0,0,0)",
+        ),
     )
     return fig

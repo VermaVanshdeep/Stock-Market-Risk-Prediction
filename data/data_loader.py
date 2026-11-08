@@ -113,6 +113,11 @@ class StockDataLoader:
                 # Handle MultiIndex columns if yfinance returns them
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
+
+                # Ensure uniform timezone-naive DatetimeIndex across global exchanges
+                if hasattr(df.index, "tz") and df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+
                 console.print(f"[bold green]Successfully retrieved {len(df)} price bars for {ticker_clean} via yfinance![/bold green]")
                 return df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna(), False
             else:
@@ -120,6 +125,13 @@ class StockDataLoader:
 
         except Exception as e:
             console.print(f"[yellow]Network fetch note: {str(e)}.[/yellow]")
+            is_indian_stock = ticker_clean.endswith(".NS") or ticker_clean.endswith(".BO")
+            if is_indian_stock:
+                raise ValueError(
+                    f"Failed to fetch market data for Indian stock '{ticker_clean}' from Yahoo Finance ({e}). "
+                    "Synthetic fallback is disabled for NSE stocks. Please verify ticker and network connectivity."
+                )
+
             if self.use_offline_fallback:
 
                 console.print(f"[bold yellow]Switching to high-fidelity synthetic market data generator for {ticker_clean}...[/bold yellow]")

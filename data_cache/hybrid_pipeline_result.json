@@ -1,0 +1,38 @@
+{
+  "ga": {
+    "baseline_fitness": 0.0015581167861026329,
+    "best_fitness": 0.0015579671419556824,
+    "fitness_gain": -1.4964414695047522e-07,
+    "improved": false,
+    "chromosome_length": 24,
+    "history": [
+      0.001596114303372191,
+      0.001596117879696122
+    ]
+  },
+  "gp": {
+    "best_fitness": 0.0011050386147588053,
+    "val_mse": 903.8957517991515,
+    "val_r2": -5.649500315787975,
+    "expression": "3.224",
+    "node_count": 1,
+    "fitness_history": [
+      0.0011049775626150486,
+      0.0011050386147588053,
+      0.0011050386147588053
+    ],
+    "complexity_history": [
+      2,
+      1,
+      1
+    ]
+  },
+  "splits": {
+    "train_samples": 1836,
+    "val_samples": 324,
+    "test_samples": 240,
+    "total_samples": 2400
+  },
+  "elapsed_seconds": 0.6183478832244873,
+  "seed": 0
+}

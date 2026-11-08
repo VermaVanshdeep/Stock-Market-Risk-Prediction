@@ -1,0 +1,16 @@
+{
+  "op": "add",
+  "terminal": null,
+  "children": [
+    {
+      "op": null,
+      "terminal": "x1",
+      "children": []
+    },
+    {
+      "op": null,
+      "terminal": "x3",
+      "children": []
+    }
+  ]
+}
