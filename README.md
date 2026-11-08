@@ -1,257 +1,138 @@
 # Stock Market Risk Prediction System
 
-A quantitative research project that combines **Soft Computing** (Takagi-Sugeno
-fuzzy inference + evolutionary optimisation) with **Deep Learning** (bidirectional
-LSTMs) to score the market risk of any listed company, delivered through a
-Streamlit web app and a terminal CLI.
+A hybrid quantitative system combining **Soft Computing** (Takagi-Sugeno-Kang fuzzy inference + evolutionary optimization) with **Deep Learning** (bidirectional LSTMs) to assess equity downside risk. Supports US equities and Indian benchmark stocks (NSE).
 
 ---
 
-## Live Demo
+## Overview
 
-A public deployment is hosted on Streamlit Community Cloud:
-
-### **[stock-market-risk-prediction.streamlit.app →](https://stock-market-risk-prediction-yu5vwfnvxrrcuv9qumrgnj.streamlit.app/)**
-
-Nothing to install — the trained model weights ship with the repository, so the
-risk score is fully responsive on first load.
-
----
-
-## What It Does
-
-- Scores any company on a **0–100 risk scale** with a Low / Moderate / High / Extreme band
-- Explains itself: shows the **fuzzy membership curves**, the linguistic term assigned to every metric, and **which TSK rules fired** and by how much
-- Accepts any ticker, a full company name, or **your own price series** from Google Sheets
-- Shows a **live Google Finance quote** alongside the risk analysis
-- Includes a **genetic algorithm** that evolves the fuzzy membership parameters
-- Ships **32 automated tests** that run in the browser or on the command line
-
----
-
-## Screens
-
-| Screen | What it does |
-|---|---|
-| **Risk Dashboard** | Search a company, view its live Google quote, metrics, risk gauge, interactive price / drawdown / volatility charts and fuzzy-rule explanations. |
-| **Manual Input** | Score your own Sharpe / drawdown / volatility values with sliders that re-predict live, plus Defensive → Crisis presets. |
-| **Model Training** | Fit the risk head on real market history; watch training curves and the model's response across regimes. |
-| **GA Optimizer** | Run the evolutionary search with a live progress bar; export the optimized chromosome. |
-| **Test Suite** | Execute all 32 tests in-browser with structured pass/fail output and tracebacks. |
-| **Reports** | Compile and download the PDF research report. |
-| **Documentation** | This manual, rendered in-app. |
+The system predicts market risk profiles rather than point prices:
+- **Continuous Risk Score (0–100):** Composite metric representing market stress and downside potential.
+- **Four-Class Risk Category:** Discrete regime mapping into `Low` (<25), `Moderate` (25–50), `High` (50–75), and `Extreme` (≥75).
+- **10-Day Forward Maximum Drawdown:** Expected peak-to-trough decline over the next 10 trading sessions.
+- **Auditable Fuzzy Explanations:** 16 Takagi-Sugeno-Kang rules with Gaussian membership functions exposing why a stock is flagged as risky.
 
 ---
 
 ## Architecture
 
+The model processes four input metrics extracted from OHLCV data: Annualized Sharpe Ratio, Historical Maximum Drawdown, Garman-Klass Intraday Volatility, and 21-day Historical Volatility.
+
+```mermaid
+flowchart LR
+    subgraph INPUTS ["Inputs"]
+        SEQ["20-Day Sequence [B, 20, 4]"]
+        VEC["Snapshot Vector [B, 4]"]
+    end
+
+    subgraph BRANCHES ["Parallel Feature Branches"]
+        LSTM["BiLSTM (2 layers, 64 hidden)<br/>Output: 128-D"]
+        TSK["TSK Fuzzy Engine (16 rules)<br/>GA-optimized MFs<br/>Output: 1-D"]
+        DENSE["Dense Network (4→32→32)<br/>Output: 32-D"]
+        GP["GP Symbolic Expression<br/>Standardized Signal<br/>Output: 1-D"]
+    end
+
+    subgraph FUSION ["Latent Fusion"]
+        CONCAT["Concatenation [B, 162]"]
+        FUS_NET["Dense Fusion (162→64→32)"]
+    end
+
+    subgraph HEADS ["Prediction Heads"]
+        H1["Risk Score Head [B, 1]<br/>Sigmoid * 100"]
+        H2["Classification Head [B, 4]<br/>CrossEntropy / Softmax"]
+        H3["Drawdown Head [B, 1]<br/>Sigmoid (0-100%)"]
+    end
+
+    SEQ --> LSTM
+    VEC --> TSK
+    VEC --> DENSE
+    VEC --> GP
+
+    LSTM & TSK & DENSE & GP --> CONCAT
+    CONCAT --> FUS_NET
+    FUS_NET --> H1 & H2 & H3
 ```
-                    ┌──────────────────────────────┐
-   OHLCV price  ───▶│  Feature Extraction           │──▶  [Sharpe, MaxDD, IV, HV]
-   series            │  utils/financial_metrics.py  │              │
-                    └──────────────────────────────┘              │
-                                                                  ▼
-   ┌───────────────────────────────────────────────────────────────────┐
-   │                    Deep Neuro-Fuzzy Risk Model                     │
-   │                                                                   │
-   │   static vector ──▶ dense encoder (4→32→32) ─────────┐            │
-   │                                                          │            │
-   │   price history ──▶ BiLSTM (2×64, bidirectional) ─────┤            │
-   │                                                          ▼            │
-   │   4 metrics ──▶ Gaussian membership ──▶ 16 TSK rules ──▶ fusion net │
-   │                  (Low / Medium / High)     (fuzzy score)              │
-   │                                                      │                 │
-   │                     ┌────────────────────────────────┼────┐            │
-   │                     ▼                ▼               ▼    │            │
-   │              Risk score 0–100   Category ×4     Max DD     │            │
-   └───────────────────────────────────────────────────────────────────┘
-                                     ▲
-                                     │  trained on
-                    ┌────────────────┴─────────────────┐
-                    │  Supervised training engine      │
-                    │  models/train.py                 │
-                    └──────────────────────────────────┘
-```
+
+- **Genetic Algorithm (GA):** Globally tunes the 24 Gaussian membership function parameters ($m, \sigma$) in the TSK layer to prevent local gradient minima and degenerate memberships.
+- **Genetic Programming (GP):** Discovers symbolic mathematical feature interactions from historical training splits via parsimony-pressured evolutionary search.
 
 ---
 
-## The Model
+## Empirical Evaluation
 
-### Supervised training
+Evaluated across a strictly chronological held-out test set (648 trading sessions, zero look-ahead leakage):
 
-The risk head is **fitted on real market history**, not left at random
-initialisation. `models/train.py` builds the dataset and trains all three heads.
+| Model Configuration | Risk Score MAE (0–100) | $R^2$ Score | Accuracy (%) | 10-Day MDD MAE |
+|---|---|---|---|---|
+| **Full Hybrid (BiLSTM + TSK + GA + GP)** | **6.19** | **0.748** | **68.98%** | **0.0283** |
+| Without GA Optimization | 7.43 | 0.665 | 70.52% | 0.0329 |
+| Without TSK Fuzzy Layer | 6.50 | 0.714 | 66.98% | 0.0290 |
+| Without BiLSTM (Temporal ablation) | 14.02 | -0.336 | 41.82% | 0.0293 |
+| Without Dense Vector Branch | 6.66 | 0.711 | 69.60% | 0.0290 |
 
-| Aspect | Detail |
-|---|---|
-| Universe | 20 liquid tickers spanning defensive to speculative regimes |
-| Dataset | ~24,000 supervised windows |
-| Sequence | 20-day metric window per sample |
-| Target horizon | 10 trading days forward |
-| Score target | `clip(future_max_drawdown × 200 + HV × 100, 0, 100)` |
-| Category target | Low (<25) / Moderate (<50) / High (<75) / Extreme (≥75) |
-| Drawdown target | Forward-looking maximum peak-to-trough decline |
-| Optimiser | Adam, lr 3e-3, cosine annealing, batch 64 |
-| Persistence | `data_cache/risk_model_weights.pt` |
-
-### Measured results
-
-A fixed regime probe (identical inputs, before vs after training):
-
-| Profile | Before | After | Band |
-|---|---|---|---|
-| Defensive | 46.80 | **15.95** | Low |
-| Balanced | 46.76 | **23.37** | Low |
-| Stressed | 46.73 | **36.86** | Moderate |
-| Crisis | 46.83 | **80.82** | Extreme |
-| **Score spread** | **0.10** | **64.87** | — |
-
-Validation reaches roughly **73% category accuracy** with a **mean absolute error
-of ~6.4 score points** — close to the noise floor, since forward drawdown is
-genuinely unpredictable. The **ranking** of instruments is reliable; the absolute
-number should be read as a score, not a precise forecast.
-
-### Fuzzy layer
-
-Four inputs, each fuzzified into three linguistic terms by a Gaussian
-membership function `μ(x) = exp(-½((x − c)/σ)²)`, combined with the product
-T-norm into **16 Takagi-Sugeno-Kang rules**, then defuzzified:
-
-```
-Fuzzy Risk Score = Σ(wᵢ · fᵢ(x)) / Σ(wᵢ)
-```
-
-This is what makes the output **interpretable** — every prediction can be traced
-back to the rules that produced it.
-
-### Genetic algorithm
-
-A 28-gene chromosome (12 membership centres, 12 spreads, 4 feature weights)
-evolved by tournament selection, simulated binary crossover (p = 0.8) and
-Gaussian mutation (p = 0.15). Fitness is `1 / (1 + MSE)`.
+*Findings:*
+- The **BiLSTM temporal branch** provides the strongest predictive signal; removing it reduces $R^2$ to negative values.
+- The **TSK Neuro-Fuzzy layer** provides full interpretability while preserving predictive performance.
+- The **Genetic Algorithm** improves score MAE by 1.24 points over unoptimized membership initializations.
 
 ---
 
-## Risk Metrics
+## Installation & Usage
 
-| Metric | Formula |
-|---|---|
-| Sharpe Ratio | `(Annualised Return − Rf) / Annualised Volatility`, Rf = 4% |
-| Maximum Drawdown | `(Peak − Trough) / Peak` over the window |
-| Implied Volatility | Garman-Klass `√(0.5·ln²(H/L) − (2ln2−1)·ln²(C/O))`, averaged over 21 days and annualised by √252 |
-| Historical Volatility | `std(log returns) × √252` over 21 days |
-| Sortino Ratio | `(Annualised Return − Rf) / Annualised Downside Volatility` |
-| Value at Risk 95% | 5th percentile of daily returns, reported as a positive loss |
+### 1. Requirements & Setup
 
----
-
-## Data Sources
-
-| Source | Used for |
-|---|---|
-| **Yahoo Finance** | Full OHLCV price history. Falls back to a Merton Jump Diffusion simulator when offline, and the UI labels the data as synthetic. |
-| **Google Finance** | Live price quotes, read from the public quote page and validated before display. |
-| **Google Sheets** | Any custom price series — paste a link, the `export?format=csv` URL, or the sheet ID. |
-| **Google Suggest** | Company-name autocomplete behind the search dropdown. |
-
-Company names resolve automatically against a built-in map of **122 listings**
-plus live Google suggestions, so typing `JPMorgan`, `Eli Lilly` or `brk.b` just
-works.
-
----
-
-## Quick Start
-
-### 1. Install
+Requires Python 3.10+ (tested on Python 3.11, 3.12, and 3.13):
 
 ```bash
+git clone https://github.com/VermaVanshdeep/Stock-Market-Risk-Prediction.git
+cd Stock-Market-Risk-Prediction
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Run the web app
+### 2. Interactive Dashboard
+
+Launch the Streamlit web application:
 
 ```bash
 streamlit run app.py
 ```
 
-Opens at **http://localhost:8501**. On the very first run the model trains
-automatically (~2 minutes) and saves its weights; later runs load them instantly.
-Use `--server.port 8502` to change the port, or `--server.headless true` on a
-remote machine.
+Features:
+- Ticker search for US and Indian NSE stocks (`RELIANCE.NS`, `TCS.NS`, `AAPL`, etc.) with automatic currency switching (`₹` vs `$`).
+- Real-time Plotly price and drawdown profiles, candlestick charts, and risk gauge dials.
+- Inspection table showing the exact fuzzy rule firing percentages behind each prediction.
 
-### 3. Run the tests
+### 3. Test Suite
 
-```bash
-python test_runner.py
-```
-
-### 4. Run the CLI
+Run the automated unit and integration tests (287 tests):
 
 ```bash
-python main.py
-```
-
-Eight menu options: run tests, analyse a company, score custom risk values, run
-the genetic algorithm, view fuzzy curves, read the docs, generate the PDF report,
-or exit. The CLI shares the same engines and the same trained weights as the web
-app.
-
-### 5. Generate the PDF report
-
-```bash
-python generate_pdf_report.py
+pytest
 ```
 
 ---
 
-## Repository Layout
+## Project Structure
 
-| Path | Responsibility |
-|---|---|
-| `app.py` | Streamlit entry point, sidebar navigation |
-| `ui/services.py` | Cached wrappers over the data, model and optimizer engines |
-| `ui/components.py` | Stat cards, risk gauge, pills, verdict block |
-| `ui/charts.py` | Plotly figure builders |
-| `ui/styles.py` | Blue-only theme and stylesheet |
-| `ui/pages/` | One module per screen |
-| `config/settings.py` | Risk parameters, fuzzy bounds, model and GA hyperparameters |
-| `data/data_loader.py` | yfinance downloader + synthetic fallback generator |
-| `data/feature_extractor.py` | Feature vectors and sequence datasets |
-| `models/fuzzy_layer.py` | TSK ANFIS layer (PyTorch + NumPy variants) |
-| `models/deep_neuro_fuzzy_net.py` | BiLSTM + fuzzy fusion network, three prediction heads |
-| `models/genetic_optimizer.py` | Evolutionary optimiser |
-| `models/train.py` | Supervised training engine and weight persistence |
-| `utils/financial_metrics.py` | Sharpe, MDD, IV, HV, VaR, Sortino |
-| `utils/visualizer.py` | Rich terminal output and matplotlib plots |
-| `main.py` | CLI menu |
-| `test_runner.py` | Test discovery and reporting |
-| `generate_pdf_report.py` | PDF research report compiler |
-| `tests/` | 32 unit and integration tests |
+```
+├── config/settings.py          # Feature bounds, risk thresholds, ticker mappings
+├── data/                       # Ingestion loader and feature extraction
+├── models/
+│   ├── deep_neuro_fuzzy_net.py # 162-D hybrid neural architecture
+│   ├── fuzzy_layer.py          # TSK ANFIS layer with Gaussian MFs
+│   ├── genetic_optimizer.py    # 24-gene GA optimizer for fuzzy parameters
+│   ├── genetic_programming.py  # Symbolic tree evolution
+│   └── train.py                # Multi-task loss training and temporal splits
+├── ui/                         # Streamlit presentation layer and Plotly charts
+└── utils/                      # Sharpe, Drawdown, Garman-Klass IV, HV routines
+```
 
 ---
 
-## Testing
+## Notes & Limitations
 
-```
-Total Tests Run   32      Passed 32      Failures 0      Errors 0
-```
-
-Covers metric maths, synthetic data generation, fuzzy forward passes, the
-fusion network, GA evolution, the end-to-end pipeline, and regression guards on
-the training engine — including an explicit test that the trained score
-responds to input, so the original flat-score bug cannot silently return.
-
-`test_runner.py` exits non-zero on failure, so it drops straight into CI.
-
----
-
-## Notes and Limitations
-
-- **Research tool, not financial advice.**
-- Absolute scores carry roughly ±6 points of error; treat the **band** (Low →
-  Extreme) as the decision-relevant output.
-- The Google Finance quote is scraped from a public page. It is validated before
-  display and degrades silently if Google's markup ever changes — the risk
-  analysis never depends on it.
-- Without PyTorch the pure-NumPy engine still runs, but training is disabled.
-- Requires Python 3.10+ (developed on 3.13).
+- **Not Financial Advice:** This software is an academic research system designed for risk profiling and quantitative analysis, not trade execution.
+- **Score Uncertainty:** Risk scores carry an expected test error of approximately $\pm 6$ points; predictions should be evaluated by category regime rather than absolute precision.
+- **Data Dependencies:** Live quotes and historical series rely on Yahoo Finance and Google Finance feeds. Offline synthetic fallback via Merton Jump Diffusion is supported for testing US tickers, but explicitly disabled for Indian NSE listings to ensure real-market data integrity.

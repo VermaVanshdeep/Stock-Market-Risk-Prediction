@@ -12,5 +12,6 @@ pytest>=7.0.0
 streamlit>=1.40.0
 plotly>=5.18.0
 
-# PDF research report
+# Reports & Presentations
 reportlab>=3.6.0
+python-pptx>=1.0.0
